@@ -8,9 +8,9 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "predist": "node scripts/make-ico.js",
     "dist": "electron-builder --win",
-    "make-ico": "node scripts/make-ico.js",
-    "test": "node test/converter.test.js"
+    "test": "node test/check.js && node test/converter.test.js"
   },
   "build": {
     "appId": "com.local.shiftwheel",
@@ -39,7 +39,8 @@
       "createDesktopShortcut": false,
       "deleteAppDataOnUninstall": false,
       "include": "build/installer.nsh"
-    }
+    },
+    "npmRebuild": false
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
