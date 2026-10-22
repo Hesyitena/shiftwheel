@@ -56,6 +56,8 @@ Ikon: `assets/icon.png` (64×64). `npm run dist` otomatis membuat `build/icon.ic
 | pdf | (sama) | LibreOffice | LibreOffice | pdftoppm (halaman 1) |
 | png, jpg, webp, gif, tiff, avif | pdf-lib | – | – | sharp |
 
+- PDF → TXT: LibreOffice meng-import PDF sebagai frame teks yang diabaikan ekspor TXT biasa, jadi Shiftwheel mengambil teks lewat FODT lalu mengurutkannya sesuai posisi di halaman. Teks biasa hasilnya rapi; tata letak kolom/tabel jadi baris berurutan kiri→kanan. PDF hasil scan (tanpa lapisan teks) ditolak karena tidak ada OCR.
+- PDF → DOCX: teks masuk ke text box per baris (perilaku import PDF LibreOffice), jadi bisa dibaca dan diedit tapi tata letaknya tidak mengalir seperti dokumen Word biasa.
 - Gambar → PDF: satu halaman dengan lebar 595 pt (A4), tinggi mengikuti rasio gambar.
 - Gambar → JPG: orientasi mengikuti EXIF, transparansi diganti putih, kualitas 92.
 - File yang sudah berformat tujuan dilewati ("Sudah berformat X").

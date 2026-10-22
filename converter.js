@@ -68,15 +68,76 @@ async function withTmpDir(fn) {
   }
 }
 
+const UNIT_PT = { in: 72, cm: 72 / 2.54, mm: 72 / 25.4, pt: 1 };
+const ENTITY = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
+
+const attr = (tag, name) => (new RegExp(`${name}="([^"]*)"`).exec(tag) || [])[1];
+function toPt(value) {
+  const m = /^(-?[\d.]+)(in|cm|mm|pt)$/.exec(value || '');
+  return m ? m[1] * UNIT_PT[m[2]] : 0;
+}
+
+// Isi teks dari potongan XML ODF
+function xmlText(xml) {
+  return xml
+    .replace(/<text:s text:c="(\d+)"\/>/g, (_, n) => ' '.repeat(n))
+    .replace(/<text:s\/>/g, ' ')
+    .replace(/<text:tab\/>/g, '\t')
+    .replace(/<text:line-break\/>/g, '\n')
+    .replace(/<\/text:[ph]>/g, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (m, e) => {
+      if (e[0] !== '#') return ENTITY[e] || m;
+      return String.fromCodePoint(e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : Number(e.slice(1)));
+    })
+    .trim();
+}
+
+// Import PDF di Writer menaruh tiap potongan teks di frame terpisah dengan urutan acak,
+// dan ekspor TXT mengabaikan frame. Jadi teks diambil dari FODT lalu diurutkan sesuai posisi.
+// ponytail: tata letak kolom/tabel jadi baris berurutan kiri->kanan, cukup untuk teks biasa.
+function fodtToText(xml) {
+  const frames = [...xml.matchAll(/<draw:frame\b([^>]*)>([\s\S]*?)<\/draw:frame>/g)]
+    .map(([, a, body]) => ({
+      page: Number(attr(a, 'text:anchor-page-number')) || 0,
+      x: toPt(attr(a, 'svg:x')),
+      bottom: toPt(attr(a, 'svg:y')) + toPt(attr(a, 'svg:height')), // dekat baseline, stabil antar ukuran font
+      // hanya isi text-box; frame gambar menyimpan data base64 yang bukan teks
+      text: xmlText((/<draw:text-box\b[^>]*>([\s\S]*?)<\/draw:text-box>/.exec(body) || [])[1] || ''),
+    }))
+    .filter((f) => f.text)
+    .sort((a, b) => a.page - b.page || a.bottom - b.bottom || a.x - b.x);
+
+  const out = [];
+  let line = [];
+  const flush = () => {
+    if (line.length) out.push(line.sort((a, b) => a.x - b.x).map((f) => f.text).join(' '));
+    line = [];
+  };
+  for (const f of frames) {
+    const prev = line[line.length - 1];
+    if (prev && (f.page !== prev.page || Math.abs(f.bottom - prev.bottom) > 3)) {
+      const newPage = f.page !== prev.page;
+      flush();
+      if (newPage) out.push('');
+    }
+    line.push(f);
+  }
+  flush();
+  return out.join('\n');
+}
+
 async function viaLibreOffice(input, fmt, out, infilter) {
   // Profil terpisah supaya tidak bentrok dengan LibreOffice yang sedang dibuka user
   const profile = pathToFileURL(path.join(os.tmpdir(), 'shiftwheel-lo-profile')).href;
+  const pdfText = infilter === 'writer_pdf_import' && fmt === 'txt';
+  const ext = pdfText ? 'fodt' : fmt;
   await withTmpDir(async (tmp) => {
     const args = [
       `-env:UserInstallation=${profile}`,
       '--headless', '--norestore', '--nolockcheck',
       ...(infilter ? [`--infilter=${infilter}`] : []),
-      '--convert-to', LO_TARGET[fmt],
+      '--convert-to', pdfText ? 'fodt' : LO_TARGET[fmt],
       '--outdir', tmp,
       input,
     ];
@@ -87,9 +148,12 @@ async function viaLibreOffice(input, fmt, out, infilter) {
       if (err.killed) throw new Error('LibreOffice terlalu lama merespons (lebih dari 2 menit).');
       throw new Error('LibreOffice gagal mengonversi file.');
     }
-    const produced = fs.readdirSync(tmp).find((f) => extOf(f) === fmt);
+    const produced = fs.readdirSync(tmp).find((f) => extOf(f) === ext);
     if (!produced) throw new Error('LibreOffice tidak menghasilkan file. Pastikan file tidak rusak atau terkunci.');
-    fs.copyFileSync(path.join(tmp, produced), out);
+    if (!pdfText) return fs.copyFileSync(path.join(tmp, produced), out);
+    const text = fodtToText(fs.readFileSync(path.join(tmp, produced), 'utf8'));
+    if (!text) throw new Error('PDF tidak berisi teks yang bisa dibaca (mungkin hasil scan).');
+    fs.writeFileSync(out, text + '\n');
   });
 }
 
@@ -165,4 +229,4 @@ async function convert(input, fmt) {
   return out;
 }
 
-module.exports = { convert, findSoffice, uniquePath, FORMATS };
+module.exports = { convert, findSoffice, uniquePath, fodtToText, FORMATS };
