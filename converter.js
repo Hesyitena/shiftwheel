@@ -147,9 +147,10 @@ function pickConverter(src, fmt) {
 async function convert(input, fmt) {
   fmt = String(fmt || '').toLowerCase();
   if (!FORMATS.includes(fmt)) throw new Error(`Format tujuan tidak dikenal: ${fmt}`);
-  if (!fs.existsSync(input) || !fs.statSync(input).isFile()) {
-    throw new Error(`File tidak ditemukan: ${path.basename(input)}`);
+  if (typeof input !== 'string' || !fs.existsSync(input)) {
+    throw new Error(`File tidak ditemukan: ${path.basename(String(input || ''))}`);
   }
+  if (!fs.statSync(input).isFile()) throw new Error('Folder tidak bisa dikonversi. Pilih file.');
 
   const src = extOf(input);
   if (src === fmt) {

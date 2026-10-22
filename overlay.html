@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-k+wa7dHja8j6f1ZpaWS9eosDfDlfrB1D0jg+q1d/l+w='; style-src 'sha256-0y62Z5iYsqgYz+bMhFNUwzFTvunT+6ku7mATr0qILLw='">
+<title>Shiftwheel</title>
+<style>
+  html, body { margin: 0; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+  svg { display: block; width: 320px; height: 320px; }
+  .wheel { transform-origin: 160px 160px; }
+  .wheel.pop { animation: pop 160ms cubic-bezier(.2, 1.4, .5, 1); }
+  @keyframes pop { from { transform: scale(.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+  .seg path { fill: rgba(28, 28, 34, .86); stroke: rgba(255, 255, 255, .14); stroke-width: 1; transition: fill 90ms, filter 90ms; }
+  .seg.hover path { fill: #2f7cf6; filter: drop-shadow(0 0 8px rgba(47, 124, 246, .95)); }
+  .seg text, .hole text { pointer-events: none; text-anchor: middle; dominant-baseline: central; font-family: "Segoe UI", sans-serif; }
+  .seg text { fill: #ececf2; font-size: 18px; font-weight: 600; letter-spacing: .5px; }
+  .hole circle { fill: rgba(12, 12, 16, .72); stroke: rgba(255, 255, 255, .14); }
+  .hole text { fill: #9c9ca8; font-size: 14px; }
+</style>
+</head>
+<body>
+<svg viewBox="0 0 320 320" aria-label="Pilih format tujuan">
+  <g class="wheel">
+    <g class="seg" data-fmt="docx"><path d="M63.6 58.4A140 140 0 0 1 256.4 58.4L199.9 117.9A58 58 0 0 0 120.1 117.9Z"/><text x="160" y="61">DOCX</text></g>
+    <g class="seg" data-fmt="jpg"><path d="M261.6 63.6A140 140 0 0 1 261.6 256.4L202.1 199.9A58 58 0 0 0 202.1 120.1Z"/><text x="259" y="160">JPG</text></g>
+    <g class="seg" data-fmt="pdf"><path d="M256.4 261.6A140 140 0 0 1 63.6 261.6L120.1 202.1A58 58 0 0 0 199.9 202.1Z"/><text x="160" y="259">PDF</text></g>
+    <g class="seg" data-fmt="txt"><path d="M58.4 256.4A140 140 0 0 1 58.4 63.6L117.9 120.1A58 58 0 0 0 117.9 199.9Z"/><text x="61" y="160">TXT</text></g>
+    <g class="hole"><circle cx="160" cy="160" r="54"/><text x="160" y="160">batal</text></g>
+  </g>
+</svg>
+<script>
+  // Highlight segmen yang sedang di-hover selama drag. Drop sendiri ditangani preload.js.
+  const wheel = document.querySelector('.wheel');
+  let current = null;
+
+  function setHover(seg) {
+    if (seg === current) return;
+    if (current) current.classList.remove('hover');
+    current = seg;
+    if (seg) seg.classList.add('hover');
+  }
+
+  document.addEventListener('dragover', (e) => setHover(e.target.closest('[data-fmt]')));
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) setHover(null); });
+  document.addEventListener('drop', () => setHover(null));
+
+  // Setiap overlay muncul: reset hover dan putar ulang animasi pop
+  window.shiftwheel.onShow(() => {
+    setHover(null);
+    wheel.classList.remove('pop');
+    void wheel.getBoundingClientRect();
+    wheel.classList.add('pop');
+  });
+</script>
+</body>
+</html>
