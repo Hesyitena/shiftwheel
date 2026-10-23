@@ -1,9 +1,14 @@
-// Jembatan overlay <-> main. Drop file ditangkap di sini supaya path asli bisa diambil.
+// Jembatan overlay/HUD <-> main. Drop file ditangkap di sini supaya path asli bisa diambil.
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+const on = (channel) => (cb) => ipcRenderer.on(channel, (_e, payload) => cb(payload));
+
 contextBridge.exposeInMainWorld('shiftwheel', {
-  onConfig: (cb) => ipcRenderer.on('overlay:config', (_e, config) => cb(config)),
-  onShow: (cb) => ipcRenderer.on('overlay:show', (_e, payload) => cb(payload)),
+  onConfig: on('overlay:config'),
+  onShow: on('overlay:show'),
+  onClose: on('overlay:close'),
+  onHud: on('hud:update'),
+  onHudHide: on('hud:hide'),
 });
 
 // Wajib paksa 'copy': Shift saat drag berarti "move" di Explorer,

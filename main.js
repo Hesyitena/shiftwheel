@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
-const { app, BrowserWindow, Tray, Menu, Notification, screen, ipcMain, shell, powerMonitor, clipboard, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, screen, ipcMain, shell, powerMonitor, clipboard, dialog } = require('electron');
 const { uIOhook, UiohookKey } = require('uiohook-napi');
 const { convert, uniquePath, CATEGORIES, FALLBACK_TARGETS } = require('./converter');
 const { TOOLS, toolTasks } = require('./tools');
@@ -10,7 +10,10 @@ const { TOOLS, toolTasks } = require('./tools');
 const APP_ID = 'com.local.shiftwheel'; // harus sama dengan build.appId di package.json
 const ICON = path.join(__dirname, 'assets', 'icon.png');
 const OVERLAY_W = 360;
-const OVERLAY_H = 400;
+const OVERLAY_H = 430;
+const HUD_W = 340;
+const HUD_H = 92;
+const HUD_DELAY = 600; // ms sebelum HUD progres muncul
 const WHEEL_CENTER = 180; // pusat roda di dalam jendela overlay
 const DRAG_THRESHOLD = 20; // piksel fisik
 const HIDE_DELAY = 400; // beri waktu event drop sampai sebelum overlay hilang
@@ -80,9 +83,9 @@ function setAutostart(on) {
 
 const liveNotes = new Set(); // simpan referensi supaya event klik tidak hilang karena GC
 
-function notify(body, onClick) {
+function notify(title, body, onClick) {
   if (!Notification.isSupported()) return;
-  const n = new Notification({ title: 'Shiftwheel', body });
+  const n = new Notification({ title, body: body || '' });
   liveNotes.add(n);
   n.on('click', () => onClick && onClick());
   n.on('close', () => liveNotes.delete(n));
@@ -97,48 +100,133 @@ let batch = newBatch();
 let quitTimer = null;
 
 function newBatch() {
-  return { ok: 0, fail: 0, skip: 0, lastOut: null, note: null };
+  return { ok: 0, fail: 0, skip: 0, done: 0, total: 0, lastOut: null, note: null, label: null };
 }
 
 function updateProgress() {
   if (tray) tray.setToolTip(pending ? `Shiftwheel: memproses ${pending} file...` : 'Shiftwheel');
 }
 
-// task: { name, run: () => Promise<path hasil> }
+// task: { name, label, chip, run: (opts) => Promise<path hasil> }
 function enqueueTasks(tasks) {
   clearTimeout(quitTimer);
   for (const task of tasks) {
     pending++;
+    batch.total++;
+    batch.label = batch.label === null || batch.label === task.label ? task.label : 'Selesai diproses';
     queue = queue.then(async () => {
       updateProgress();
+      const info = { name: task.name, label: task.label, chip: task.chip, index: batch.done + 1, total: batch.total, percent: null };
+      // HUD baru muncul kalau tugas berjalan agak lama, supaya konversi cepat tidak berkedip
+      if (hudVisible) hudUpdate(info);
+      else hudTimer = setTimeout(() => hudUpdate(info), HUD_DELAY);
+      const onProgress = (p) => { info.percent = p; if (hudVisible) hudUpdate(info); };
       try {
-        batch.lastOut = await task.run();
+        batch.lastOut = await task.run({ onProgress });
         batch.ok++;
       } catch (err) {
         if (err.skipped) batch.skip++;
         else batch.fail++;
         batch.note = batch.note || `${task.name}: ${err.message}`;
       }
-      if (--pending === 0) finishBatch();
+      clearTimeout(hudTimer);
+      batch.done++;
+      if (--pending === 0) {
+        hudHide();
+        finishBatch();
+      }
       updateProgress();
     });
   }
 }
 
 function enqueue(files, fmt) {
-  enqueueTasks(files.map((f) => ({ name: path.basename(String(f || '')), run: () => convert(f, fmt) })));
+  const label = `Konversi ke ${fmt.toUpperCase()}`;
+  enqueueTasks(files.map((f) => ({
+    name: path.basename(String(f || '')), label, chip: fmt.toUpperCase(), run: (opts) => convert(f, fmt, opts),
+  })));
 }
 
 function finishBatch() {
-  const { ok, fail, skip, lastOut, note } = batch;
+  const { ok, fail, skip, total, lastOut, note, label } = batch;
   batch = newBatch();
-  let body = `${ok} berhasil, ${fail} gagal`;
-  if (skip) body += `, ${skip} dilewati`;
-  if (note && (fail || skip)) body += `\n${note}`;
-  notify(body, lastOut ? () => shell.showItemInFolder(lastOut) : null);
+  const open = lastOut ? () => shell.showItemInFolder(lastOut) : null;
+  if (!fail && !skip) {
+    notify(ok === 1 ? `${path.basename(lastOut)} siap` : `${ok} file selesai`, `${label}. Klik untuk membuka foldernya.`, open);
+  } else if (!ok && !fail) {
+    notify(total === 1 ? 'Dilewati' : `${total} file dilewati`, note);
+  } else if (!ok) {
+    notify(total === 1 ? 'Gagal diproses' : `${total} file gagal diproses`, note);
+  } else {
+    notify(`${ok} dari ${total} file selesai`, `${fail + skip} tidak diproses. ${note}`, open);
+  }
 
   // Dipanggil dari menu klik kanan tanpa instance lain: keluar setelah antrean kosong
   if (convertOnly) quitTimer = setTimeout(() => { if (pending === 0) app.quit(); }, LINGER_MS);
+}
+
+// ---------- HUD progres (pojok kanan bawah) ----------
+
+let hud = null;
+let hudVisible = false;
+let hudTimer = null;
+let hudLastSend = 0;
+
+function floatingWindow(width, height) {
+  const win = new BrowserWindow({
+    width,
+    height,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+      spellcheck: false,
+    },
+  });
+  win.setAlwaysOnTop(true, 'screen-saver');
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  return win;
+}
+
+function hudUpdate(info) {
+  if (!hud) {
+    hud = floatingWindow(HUD_W, HUD_H);
+    hud.loadFile(path.join(__dirname, 'hud.html'));
+    hud.webContents.once('did-finish-load', () => hudVisible && hud.webContents.send('hud:update', info));
+  }
+  if (!hudVisible) {
+    const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    hud.setBounds({ x: wa.x + wa.width - HUD_W - 8, y: wa.y + wa.height - HUD_H - 4, width: HUD_W, height: HUD_H });
+    hud.showInactive();
+    hudVisible = true;
+  } else if (Date.now() - hudLastSend < 100 && info.percent !== 1) {
+    return; // batasi update progres ~10x per detik
+  }
+  hudLastSend = Date.now();
+  if (!hud.webContents.isLoading()) hud.webContents.send('hud:update', info);
+}
+
+function hudHide() {
+  clearTimeout(hudTimer);
+  if (!hudVisible) return;
+  hudVisible = false;
+  hud.webContents.send('hud:hide');
+  setTimeout(() => { if (!hudVisible) hud.hide(); }, 200);
 }
 
 // ---------- Aksi file (roda Alt) ----------
@@ -193,12 +281,12 @@ function openTerminal(paths) {
 }
 
 const ACTIONS = [
-  { id: 'copy-path', label: 'Salin Path', caption: 'Salin path lengkap', run: (p) => { clipboard.writeText(p.join('\r\n')); return { msg: `Path ${count(p)} disalin` }; } },
-  { id: 'copy', label: 'Salin', caption: 'Salin ke clipboard (siap paste)', run: async (p) => { await copyFilesToClipboard(p); return { msg: `${count(p)} disalin ke clipboard` }; } },
-  { id: 'copy-to', label: 'Salin Ke', caption: 'Salin ke folder lain...', run: (p) => transfer(p, false) },
-  { id: 'move-to', label: 'Pindah Ke', caption: 'Pindahkan ke folder lain...', run: (p) => transfer(p, true) },
-  { id: 'terminal', label: 'Terminal', caption: 'Buka folder di Terminal', run: openTerminal },
-  { id: 'reveal', label: 'Explorer', caption: 'Tampilkan di Explorer', run: (p) => shell.showItemInFolder(p[0]) },
+  { id: 'copy-path', icon: 'link', label: 'Salin path', caption: 'Salin path lengkap sebagai teks', run: (p) => { clipboard.writeText(p.join('\r\n')); return { msg: `Path ${count(p)} disalin` }; } },
+  { id: 'copy', icon: 'copy', label: 'Salin', caption: 'Salin ke clipboard, siap di-paste', run: async (p) => { await copyFilesToClipboard(p); return { msg: `${count(p)} siap di-paste` }; } },
+  { id: 'copy-to', icon: 'copy-to', label: 'Salin ke', caption: 'Salin ke folder lain', run: (p) => transfer(p, false) },
+  { id: 'move-to', icon: 'move-to', label: 'Pindah ke', caption: 'Pindahkan ke folder lain', run: (p) => transfer(p, true) },
+  { id: 'terminal', icon: 'terminal', label: 'Terminal', caption: 'Buka foldernya di Terminal', run: openTerminal },
+  { id: 'reveal', icon: 'folder', label: 'Explorer', caption: 'Tampilkan di Explorer', run: (p) => shell.showItemInFolder(p[0]) },
 ];
 
 async function runAction(id, paths) {
@@ -208,9 +296,9 @@ async function runAction(id, paths) {
     const existing = paths.filter((p) => fs.existsSync(p));
     if (!existing.length) throw new Error('File tidak ditemukan.');
     const result = await action.run(existing);
-    if (result) notify(result.msg, result.reveal ? () => shell.showItemInFolder(result.reveal) : null);
+    if (result) notify(result.msg, result.reveal ? 'Klik untuk membuka foldernya.' : '', result.reveal ? () => shell.showItemInFolder(result.reveal) : null);
   } catch (err) {
-    notify(`${action.caption} gagal: ${err.message}`);
+    notify(`${action.label} gagal`, err.message);
   }
 }
 
@@ -222,9 +310,9 @@ function wheelConfig() {
   for (const [cat, c] of Object.entries(CATEGORIES)) convert[cat] = c.targets.map(conv);
   const tools = {};
   for (const [cat, list] of Object.entries(TOOLS)) {
-    tools[cat] = list.map((t) => ({ id: `tool:${cat}.${t.id}`, label: t.label, caption: t.caption, multi: Boolean(t.multi) }));
+    tools[cat] = list.map((t) => ({ id: `tool:${cat}.${t.id}`, label: t.label, caption: t.caption, icon: t.icon, multi: Boolean(t.multi) }));
   }
-  const actions = ACTIONS.map((a) => ({ id: `action:${a.id}`, label: a.label, caption: a.caption }));
+  const actions = ACTIONS.map((a) => ({ id: `action:${a.id}`, label: a.label, caption: a.caption, icon: a.icon }));
   return { convert, tools, actions };
 }
 
@@ -240,7 +328,7 @@ ipcMain.on('overlay:drop', (e, msg) => {
   if (kind === 'convert') enqueue(paths, value);
   else if (kind === 'action') runAction(value, paths);
   else if (kind === 'tool') {
-    try { enqueueTasks(toolTasks(value, paths)); } catch (err) { notify(err.message); }
+    try { enqueueTasks(toolTasks(value, paths)); } catch (err) { notify('Tool tidak bisa dipakai', err.message); }
   }
 });
 
@@ -250,35 +338,9 @@ let shown = false;
 let hideTimer = null;
 
 function createOverlay() {
-  overlay = new BrowserWindow({
-    width: OVERLAY_W,
-    height: OVERLAY_H,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    skipTaskbar: true,
-    focusable: false,
-    hasShadow: false,
-    alwaysOnTop: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false,
-      backgroundThrottling: false,
-      spellcheck: false,
-    },
-  });
-  overlay.setAlwaysOnTop(true, 'screen-saver');
+  overlay = floatingWindow(OVERLAY_W, OVERLAY_H);
   overlay.loadFile(path.join(__dirname, 'overlay.html'));
   overlay.webContents.on('did-finish-load', () => overlay.webContents.send('overlay:config', wheelConfig()));
-  overlay.webContents.on('will-navigate', (e) => e.preventDefault());
-  overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   overlay.on('session-end', stopHook); // logoff / shutdown Windows
 }
 
@@ -305,6 +367,7 @@ function scheduleHide() {
   if (!shown) return;
   shown = false;
   clearTimeout(hideTimer);
+  overlay.webContents.send('overlay:close'); // animasi pudar
   hideTimer = setTimeout(() => overlay && overlay.hide(), HIDE_DELAY);
 }
 
@@ -356,7 +419,7 @@ function startHook() {
     uIOhook.start();
     hookRunning = true;
   } catch (err) {
-    notify(`Hook global gagal dijalankan: ${err.message}`);
+    notify('Shiftwheel tidak bisa membaca keyboard/mouse', err.message);
   }
 }
 
@@ -383,19 +446,31 @@ function buildMenu() {
       },
     },
     {
-      label: 'Jalankan saat Windows menyala',
+      label: app.isPackaged ? 'Jalankan saat Windows menyala' : 'Jalankan saat Windows menyala (hanya versi terinstal)',
       type: 'checkbox',
       checked: app.isPackaged && isAutostart(),
       enabled: app.isPackaged, // nonaktif saat dev
       click: (item) => setAutostart(item.checked),
     },
     { type: 'separator' },
+    { label: `Shiftwheel ${app.getVersion()}${app.isPackaged ? '' : ' (dev)'}`, enabled: false },
     { label: 'Keluar', click: () => app.quit() },
   ]);
 }
 
+// Ikon tray tajam di semua skala: 16, 24, dan 32 px dari icon.png
+function trayImage() {
+  const src = nativeImage.createFromPath(ICON);
+  const img = nativeImage.createEmpty();
+  for (const scaleFactor of [1, 1.5, 2]) {
+    const size = Math.round(16 * scaleFactor);
+    img.addRepresentation({ scaleFactor, buffer: src.resize({ width: size, height: size, quality: 'best' }).toPNG() });
+  }
+  return img;
+}
+
 function createTray() {
-  tray = new Tray(ICON);
+  tray = new Tray(trayImage());
   updateProgress();
   // Menu dibangun ulang tiap dibuka supaya status autostart selalu sesuai registry
   const open = () => tray.popUpContextMenu(buildMenu());
@@ -423,7 +498,7 @@ function startBackground() {
   powerMonitor.on('suspend', stopHook);
   powerMonitor.on('resume', () => { stopHook(); startHook(); }); // hook bisa mati setelah sleep
 
-  if (firstRun && !hidden) notify('Shiftwheel berjalan di tray. Drag file lalu ketuk Shift (konversi), Ctrl (tools), atau Alt (aksi).');
+  if (firstRun && !hidden) notify('Shiftwheel siap', 'Mulai drag file, lalu ketuk Shift untuk konversi, Ctrl untuk tools, atau Alt untuk aksi.');
 }
 
 // ---------- Single instance ----------
@@ -436,7 +511,7 @@ if (!app.requestSingleInstanceLock({ argv: process.argv })) {
     const argv = (data && data.argv) || _argv;
     if (handleArgv(argv)) return;
     if (convertOnly) return startBackground(); // app dibuka normal saat instance --convert masih jalan
-    if (!argv.includes('--hidden')) notify('Sudah berjalan di tray');
+    if (!argv.includes('--hidden')) notify('Shiftwheel sudah berjalan', 'Ikonnya ada di tray. Mulai drag file, lalu ketuk Shift.');
   });
 
   app.whenReady().then(() => {
