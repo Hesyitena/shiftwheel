@@ -4,12 +4,18 @@ const os = require('os');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
 const { pathToFileURL } = require('url');
-const sharp = require('sharp');
-const { PDFDocument } = require('pdf-lib');
-
-// Cache libvips membiarkan file input tetap terbuka; di Windows file itu jadi tidak bisa
-// dihapus/dipindah selama Shiftwheel jalan. Tiap file cuma diproses sekali, jadi cache tidak perlu.
-sharp.cache(false);
+// sharp (libvips) dan pdf-lib baru dimuat saat konversi pertama: ~17 MB RAM yang tidak perlu selama idle
+let sharpLib = null;
+function sharp(...args) {
+  if (!sharpLib) {
+    sharpLib = require('sharp');
+    // Cache libvips membiarkan file input tetap terbuka; di Windows file itu jadi tidak bisa
+    // dihapus/dipindah selama Shiftwheel jalan. Tiap file cuma diproses sekali, jadi cache tidak perlu.
+    sharpLib.cache(false);
+  }
+  return sharpLib(...args);
+}
+const pdfLib = () => require('pdf-lib');
 
 // Kategori file: ekstensi sumber dan format tujuan yang tampil di roda konversi
 const CATEGORIES = {
@@ -357,7 +363,7 @@ const ENCODE = {
 
 // Satu atau beberapa gambar jadi satu PDF, satu halaman per gambar (lebar 595 pt)
 async function imagesToPdf(files, out) {
-  const doc = await PDFDocument.create();
+  const doc = await pdfLib().PDFDocument.create();
   await withTmpDir(async (tmp) => {
     for (const file of files) {
       const isJpg = extOf(file) === 'jpg';
@@ -480,6 +486,8 @@ async function convert(input, fmt, opts = {}) {
 
 module.exports = {
   convert,
+  sharp,
+  pdfLib,
   CATEGORIES,
   FALLBACK_TARGETS,
   AUDIO_ARGS,

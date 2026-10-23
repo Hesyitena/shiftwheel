@@ -1,10 +1,8 @@
 // Tools satu-klik untuk roda Ctrl. Tidak bergantung pada Electron supaya bisa dites dengan node biasa.
 const fs = require('fs');
 const path = require('path');
-const sharp = require('sharp');
-const { PDFDocument, PDFName, degrees } = require('pdf-lib');
 const {
-  AUDIO_ARGS, H264, extOf, baseOf, categoryOf, uniquePath, checkInput, withTmpDir, ffmpegTo, sharpInput, imagesToPdf,
+  sharp, pdfLib, AUDIO_ARGS, H264, extOf, baseOf, categoryOf, uniquePath, checkInput, withTmpDir, ffmpegTo, sharpInput, imagesToPdf,
 } = require('./converter');
 
 // "foto.jpg" -> "foto (dikompres).jpg" di folder yang sama
@@ -57,7 +55,7 @@ async function mergeImagesToPdf(files) {
 
 async function loadPdf(file) {
   try {
-    return await PDFDocument.load(fs.readFileSync(file), { updateMetadata: false });
+    return await pdfLib().PDFDocument.load(fs.readFileSync(file), { updateMetadata: false });
   } catch {
     throw new Error('PDF tidak bisa dibaca (rusak atau terkunci password).');
   }
@@ -72,7 +70,7 @@ async function pdfTool(file, label, edit) {
 }
 
 async function mergePdfs(files) {
-  const merged = await PDFDocument.create();
+  const merged = await pdfLib().PDFDocument.create();
   for (const file of files) {
     const doc = await loadPdf(file);
     for (const page of await merged.copyPages(doc, doc.getPageIndices())) merged.addPage(page);
@@ -88,7 +86,7 @@ async function splitPdf(file) {
   if (count < 2) throw skip('PDF hanya 1 halaman');
   let first;
   for (let i = 0; i < count; i++) {
-    const single = await PDFDocument.create();
+    const single = await pdfLib().PDFDocument.create();
     single.addPage((await single.copyPages(doc, [i]))[0]);
     const out = uniquePath(path.dirname(file), `${baseOf(file)} hal ${i + 1}`, 'pdf');
     fs.writeFileSync(out, await single.save());
@@ -104,7 +102,7 @@ function stripPdfMetadata(doc) {
   doc.setKeywords([]);
   doc.setCreator('');
   doc.setProducer('');
-  doc.catalog.delete(PDFName.of('Metadata')); // XMP
+  doc.catalog.delete(pdfLib().PDFName.of('Metadata')); // XMP
 }
 
 // ---------- Video & audio (ffmpeg) ----------
@@ -138,7 +136,7 @@ const TOOLS = {
   pdf: [
     { id: 'merge', icon: 'merge', label: 'Gabung', caption: 'Gabung jadi satu PDF', multi: true, all: mergePdfs },
     { id: 'split', icon: 'split', label: 'Pisah', caption: 'Pisah per halaman', each: splitPdf },
-    { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar semua halaman 90°', each: (f) => pdfTool(f, 'diputar', (doc) => doc.getPages().forEach((p) => p.setRotation(degrees((p.getRotation().angle + 90) % 360)))) },
+    { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar semua halaman 90°', each: (f) => pdfTool(f, 'diputar', (doc) => doc.getPages().forEach((p) => p.setRotation(pdfLib().degrees((p.getRotation().angle + 90) % 360)))) },
     { id: 'strip', icon: 'strip', label: 'Metadata', caption: 'Hapus metadata PDF', each: (f) => pdfTool(f, 'tanpa metadata', stripPdfMetadata) },
   ],
   video: [

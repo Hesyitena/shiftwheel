@@ -15,7 +15,7 @@ const HUD_W = 340;
 const HUD_H = 92;
 const HUD_DELAY = 600; // ms sebelum HUD progres muncul
 const WHEEL_CENTER = 180; // pusat roda di dalam jendela overlay
-const DRAG_THRESHOLD = 20; // piksel fisik
+const DRAG_THRESHOLD = 16; // DIP (~20 px fisik di skala 125%)
 const HIDE_DELAY = 400; // beri waktu event drop sampai sebelum overlay hilang
 const LINGER_MS = 8000; // mode --convert: tunggu sebentar supaya notifikasi masih bisa diklik
 const LOGIN_ARGS = ['--hidden'];
@@ -29,6 +29,11 @@ const TRIGGER = {
   [UiohookKey.Alt]: 'actions',
   [UiohookKey.AltRight]: 'actions',
 };
+
+// Hemat sumber daya: roda sederhana cukup dirender CPU (proses GPU ~80 MB -> ~15 MB, transparansi
+// tetap jalan), dan network service digabung ke proses utama karena Shiftwheel tidak memakai jaringan.
+app.disableHardwareAcceleration();
+app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
 // Saat dev (npm start) belum ada shortcut Start Menu dengan AUMID ini, jadi toast
 // diarahkan ke electron.exe supaya tetap muncul. Versi terinstal memakai APP_ID.
@@ -232,7 +237,12 @@ function hudHide() {
   if (!hudVisible) return;
   hudVisible = false;
   hud.webContents.send('hud:hide');
-  setTimeout(() => { if (!hudVisible) hud.hide(); }, 200);
+  // Hancurkan setelah animasi: renderer HUD tidak perlu menganggur di memori (dibuat lagi saat dibutuhkan)
+  setTimeout(() => {
+    if (hudVisible || !hud) return;
+    hud.destroy();
+    hud = null;
+  }, 250);
 }
 
 // ---------- Aksi file (roda Alt) ----------
@@ -355,9 +365,7 @@ function createOverlay() {
   overlay.on('session-end', stopHook); // logoff / shutdown Windows
 }
 
-function placeOverlay(physX, physY) {
-  // uiohook memberi piksel fisik; window butuh DIP (penting di scaling selain 100%)
-  const p = screen.screenToDipPoint({ x: physX, y: physY });
+function placeOverlay(p) {
   const wa = screen.getDisplayNearestPoint(p).workArea;
   const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
   const x = clamp(Math.round(p.x - WHEEL_CENTER), wa.x, wa.x + wa.width - OVERLAY_W);
@@ -365,10 +373,10 @@ function placeOverlay(physX, physY) {
   overlay.setBounds({ x, y, width: OVERLAY_W, height: OVERLAY_H });
 }
 
-function openWheel(mode) {
+function openWheel(mode, cursor) {
   const fresh = !shown;
   clearTimeout(hideTimer);
-  if (fresh) placeOverlay(drag.x, drag.y);
+  if (fresh) placeOverlay(cursor);
   overlay.webContents.send('overlay:show', { mode, fresh });
   if (fresh) overlay.showInactive();
   shown = true;
@@ -394,10 +402,12 @@ function hideNow() {
 }
 
 // ---------- Hook global (uiohook) ----------
-// Heuristik "file sedang di-drag": tombol kiri ditahan + gerak > 20 px. Roda terbuka saat
-// Shift/Ctrl/Alt diketuk selama drag dan tetap terbuka sampai mouse dilepas (atau Esc).
+// Heuristik "file sedang di-drag": tombol kiri ditahan dan kursor sudah bergeser > DRAG_THRESHOLD
+// saat Shift/Ctrl/Alt diketuk. Roda tetap terbuka sampai mouse dilepas (atau Esc).
+// Sengaja tanpa listener mousemove: jarak dihitung sekali saat tombol diketuk, jadi gerakan
+// mouse sehari-hari hampir tidak memakan CPU.
 
-const drag = { down: false, moved: false, x0: 0, y0: 0, x: 0, y: 0 };
+const drag = { down: false, x0: 0, y0: 0 }; // posisi klik dalam DIP
 const held = new Set(); // abaikan auto-repeat saat tombol ditahan
 let hookRunning = false;
 
@@ -409,21 +419,19 @@ uIOhook.on('keydown', (e) => {
   const mode = TRIGGER[e.keycode];
   if (!mode || held.has(e.keycode)) return;
   held.add(e.keycode);
-  if (enabled && drag.down && drag.moved) openWheel(mode);
+  if (!enabled || !drag.down) return;
+  if (shown) return openWheel(mode); // ganti roda
+  const cursor = screen.getCursorScreenPoint();
+  if (Math.hypot(cursor.x - drag.x0, cursor.y - drag.y0) > DRAG_THRESHOLD) openWheel(mode, cursor);
 });
 
 uIOhook.on('keyup', (e) => held.delete(e.keycode));
 
 uIOhook.on('mousedown', (e) => {
   if (e.button !== 1) return;
-  Object.assign(drag, { down: true, moved: false, x0: e.x, y0: e.y, x: e.x, y: e.y });
-});
-
-uIOhook.on('mousemove', (e) => {
-  if (!drag.down) return;
-  drag.x = e.x;
-  drag.y = e.y;
-  if (!drag.moved && Math.hypot(e.x - drag.x0, e.y - drag.y0) > DRAG_THRESHOLD) drag.moved = true;
+  // uiohook memberi piksel fisik; ubah ke DIP supaya benar di scaling selain 100%
+  const p = screen.screenToDipPoint({ x: e.x, y: e.y });
+  Object.assign(drag, { down: true, x0: p.x, y0: p.y });
 });
 
 uIOhook.on('mouseup', (e) => {
@@ -447,7 +455,7 @@ function stopHook() {
   try { uIOhook.stop(); } catch { /* sudah berhenti */ }
   hookRunning = false;
   held.clear();
-  Object.assign(drag, { down: false, moved: false });
+  drag.down = false;
   hideNow();
 }
 

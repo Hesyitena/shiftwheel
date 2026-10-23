@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-kl8fZmRaICp68XaSgYrttJCXYRxLaBA0liZTAYCn+a0='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-pOP+7xods3WCsq3I9CIFzLwoe4VsBye8AFHERotc8zA='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -104,38 +104,71 @@
   };
 
   // ---------- Suara: disintesis WebAudio, pendek dan pelan ----------
-  const sound = { on: true, ctx: null, last: 0 };
-  function tone(notes, { dur = 0.06, gain = 0.05, type = 'sine', step = 0.6 } = {}) {
+  // Nada >= 500 Hz supaya jelas di speaker laptop; tiap nada diberi harmonik oktaf supaya "nyaring".
+  // Kompresor di ujung mencegah pecah kalau bunyi bertumpuk.
+  const sound = { on: true, ctx: null, out: null, last: 0, idle: 0, close: 0 };
+  function audio() {
+    if (!sound.ctx) {
+      sound.ctx = new AudioContext();
+      const comp = sound.ctx.createDynamicsCompressor();
+      // Limiter: hanya bekerja di dekat 0 dB, jadi volume normal tidak ikut ditekan
+      comp.threshold.value = -2;
+      comp.knee.value = 0;
+      comp.ratio.value = 20;
+      comp.attack.value = 0.001;
+      comp.release.value = 0.05;
+      sound.out = sound.ctx.createGain();
+      sound.out.gain.value = 1;
+      sound.out.connect(comp).connect(sound.ctx.destination);
+    }
+    if (sound.ctx.state === 'suspended') sound.ctx.resume();
+    // Diam 1,5 dtk: suspend (CPU 0). Diam 30 dtk: tutup (proses audio ikut lepas dari memori).
+    clearTimeout(sound.idle);
+    clearTimeout(sound.close);
+    sound.idle = setTimeout(() => sound.ctx && sound.ctx.suspend(), 1500);
+    sound.close = setTimeout(() => { if (sound.ctx) sound.ctx.close(); sound.ctx = null; }, 30000);
+    return sound.ctx;
+  }
+  function tone(notes, { dur = 0.06, gain = 0.2, type = 'sine', step = 0.6, bright = 0.3 } = {}) {
     if (!sound.on) return;
-    const ctx = sound.ctx || (sound.ctx = new AudioContext());
-    let t = ctx.currentTime;
+    const ctx = audio();
+    let t = ctx.currentTime + 0.005;
     for (const note of notes) {
       const [from, to] = Array.isArray(note) ? note : [note, note];
-      const osc = ctx.createOscillator();
       const amp = ctx.createGain();
-      osc.type = type;
-      osc.frequency.setValueAtTime(from, t);
-      if (to !== from) osc.frequency.exponentialRampToValueAtTime(to, t + dur);
       amp.gain.setValueAtTime(0.0001, t);
-      amp.gain.exponentialRampToValueAtTime(gain, t + 0.004);
+      // Naik cepat, tahan penuh ~40% durasi, lalu meluruh: bunyi pendek tetap terdengar jelas
+      amp.gain.exponentialRampToValueAtTime(gain, t + 0.003);
+      amp.gain.setValueAtTime(gain, t + dur * 0.4);
       amp.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(amp).connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + dur + 0.02);
+      amp.connect(sound.out);
+      for (const [mult, level] of [[1, 1], [2, bright]]) {
+        if (!level) continue;
+        const osc = ctx.createOscillator();
+        const mix = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(from * mult, t);
+        if (to !== from) osc.frequency.exponentialRampToValueAtTime(to * mult, t + dur);
+        mix.gain.value = level;
+        osc.connect(mix).connect(amp);
+        osc.start(t);
+        osc.stop(t + dur + 0.02);
+      }
       t += dur * step;
     }
   }
   const SOUNDS = {
-    open: () => tone([[520, 760]], { dur: 0.07, gain: 0.04 }),
-    tick: () => tone([2000], { dur: 0.016, gain: 0.014, type: 'triangle' }),
-    select: () => tone([740, 1110], { dur: 0.07, gain: 0.05 }),
-    cancel: () => tone([[480, 300]], { dur: 0.09, gain: 0.035, type: 'triangle' }),
-    done: () => tone([784, 1175], { dur: 0.24, gain: 0.05, step: 0.45 }),
-    error: () => tone([247, 196], { dur: 0.13, gain: 0.045, type: 'triangle', step: 0.9 }),
+    open: () => tone([[620, 940]], { dur: 0.09, gain: 0.55 }),
+    tick: () => tone([[1500, 1150]], { dur: 0.04, gain: 0.7, type: 'triangle', bright: 0.2 }), // pindah segmen
+    switch: () => tone([1050, 1400], { dur: 0.05, gain: 0.5, type: 'triangle', step: 0.85 }), // ganti roda
+    select: () => tone([880, 1320], { dur: 0.1, gain: 0.55 }),
+    cancel: () => tone([[760, 470]], { dur: 0.14, gain: 0.5, type: 'triangle' }),
+    done: () => tone([784, 1175, 1568], { dur: 0.24, gain: 0.45, step: 0.42 }),
+    error: () => tone([523, 392], { dur: 0.17, gain: 0.55, type: 'triangle', step: 0.9 }),
   };
   function play(name) {
     // Ketukan hover dibatasi supaya tidak berisik saat kursor menyapu banyak segmen
-    if (name === 'tick') { if (performance.now() - sound.last < 35) return; sound.last = performance.now(); }
+    if (name === 'tick') { if (performance.now() - sound.last < 30) return; sound.last = performance.now(); }
     if (SOUNDS[name]) SOUNDS[name]();
   }
 
@@ -278,7 +311,7 @@
       void stage.offsetWidth; // putar ulang animasi
       stage.classList.add('pop');
     }
-    play(fresh ? 'open' : 'tick');
+    play(fresh ? 'open' : 'switch');
     render();
   });
 

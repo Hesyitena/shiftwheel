@@ -14,7 +14,7 @@ Kalau prosesnya lebih dari setengah detik, kartu progres kecil muncul di pojok k
 
 Shiftwheel berjalan di system tray tanpa jendela. Menu tray berisi **Aktif**, **Suara**, **Jalankan saat Windows menyala**, dan **Keluar**.
 
-**Suara.** Efek suara pendek dan pelan saat roda muncul, saat pindah segmen, saat file di-drop atau dibatalkan, dan saat proses gagal. Chime "selesai" hanya berbunyi untuk proses yang lebih dari 1,5 detik, supaya konversi instan tidak ramai. Semua suara disintesis langsung (WebAudio), tanpa file audio. Matikan lewat **Suara** di menu tray; pilihannya tersimpan.
+**Suara.** Efek suara pendek saat roda muncul, saat pindah segmen, saat ganti roda (Shift/Ctrl/Alt), saat file di-drop atau dibatalkan, dan saat proses gagal. Chime "selesai" hanya berbunyi untuk proses yang lebih dari 1,5 detik, supaya konversi instan tidak ramai. Semua suara disintesis langsung (WebAudio), tanpa file audio. Matikan lewat **Suara** di menu tray; pilihannya tersimpan.
 
 ## Kebutuhan
 
@@ -47,6 +47,18 @@ Installer ada di `dist/Shiftwheel Setup <versi>.exe`. Jalankan installer itu:
 - Klik kanan file di Explorer → **Show more options** → **Konversi dengan Shiftwheel** → PDF / DOCX / TXT / JPG.
 
 Uninstall lewat Settings → Apps. Uninstaller menutup Shiftwheel yang sedang jalan, lalu menghapus entri autostart dan menu klik kanan. Pengaturan di `%APPDATA%\Shiftwheel` tidak ikut dihapus.
+
+## Ringan di CPU dan RAM
+
+Shiftwheel jalan terus di latar belakang, jadi dibuat sehemat mungkin:
+
+- **Tanpa GPU.** Roda cukup dirender CPU; proses GPU Chromium turun dari ~80 MB ke ~15 MB.
+- **Tanpa proses jaringan.** Network service digabung ke proses utama (Shiftwheel tidak pernah memakai internet).
+- **Library berat dimuat saat dibutuhkan.** sharp (libvips) dan pdf-lib baru dimuat saat konversi pertama.
+- **Jendela progres dibuat saat perlu** dan dihancurkan lagi setelah selesai.
+- **Audio tidur saat diam.** Mesin suara disuspend 1,5 detik setelah bunyi terakhir dan ditutup setelah 30 detik.
+- **Hook tanpa `mousemove`.** Gerakan mouse sehari-hari tidak diproses; jarak drag dihitung sekali saat Shift/Ctrl/Alt diketuk.
+- LibreOffice, ffmpeg, dan OCR hanya jalan selama ada file yang diproses.
 
 ## Development dan mencoba update
 
