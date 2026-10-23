@@ -8,9 +8,11 @@ Konversi file ala [Tangerine](https://tangerineformac.com/) (macOS) untuk Window
 | **Ctrl** | Tools | kompres, 50%, putar, hitam putih, hapus metadata, gabung jadi PDF |
 | **Alt** | Aksi file | salin path, salin, salin ke…, pindah ke…, terminal, tampilkan di Explorer |
 
-Isi roda mengikuti tipe file yang di-drag. Ketuk tombol lain saat roda terbuka untuk berganti roda. Lepas file di tengah ("batal") atau di luar roda, atau tekan **Esc**, untuk batal. Hasil disimpan di folder yang sama dengan file asal. Setelah selesai muncul notifikasi Windows; klik untuk membuka folder hasil.
+Isi roda mengikuti tipe file yang di-drag; lubang tengahnya menunjukkan apa yang sedang dibawa (misalnya "2 gambar"). Keycap di bawah roda menunjukkan roda yang aktif; ketuk tombol lain untuk berganti roda. Lepas file di lubang tengah ("Batal") atau di luar roda, atau tekan **Esc**, untuk batal. Hasil disimpan di folder yang sama dengan file asal.
 
-Shiftwheel berjalan di system tray tanpa jendela. Menu tray berisi **Aktif**, **Jalankan saat Windows menyala**, dan **Keluar**. Selama memproses, tooltip ikon tray menampilkan jumlah file yang tersisa.
+Kalau prosesnya lebih dari setengah detik, kartu progres kecil muncul di pojok kanan bawah (audio/video dengan persentase). Setelah selesai muncul notifikasi, misalnya "laporan.pdf siap"; klik untuk membuka foldernya.
+
+Shiftwheel berjalan di system tray tanpa jendela. Menu tray berisi **Aktif**, **Jalankan saat Windows menyala**, dan **Keluar**.
 
 ## Kebutuhan
 
@@ -43,14 +45,18 @@ Installer ada di `dist/Shiftwheel Setup <versi>.exe`. Jalankan installer itu:
 
 Uninstall lewat Settings → Apps. Uninstaller menutup Shiftwheel yang sedang jalan, lalu menghapus entri autostart dan menu klik kanan. Pengaturan di `%APPDATA%\Shiftwheel` tidak ikut dihapus.
 
-## Development
+## Development dan mencoba update
 
-```bash
-npm start        # jalankan dari source (autostart tidak didaftarkan saat dev)
-npm test         # node --check + cek hash CSP + tes converter dan tools
-```
+| Perintah | Kapan dipakai |
+|---|---|
+| `npm run dev` | Mencoba perubahan langsung. Shiftwheel jalan dari source dan **restart sendiri setiap file app disimpan**. Versi terinstal ditutup dulu (keduanya tidak bisa jalan bersamaan); buka lagi dari Start Menu setelah selesai. Berhenti dengan Ctrl+C atau **Keluar** di menu tray. |
+| `npm run pasang` | Perubahan sudah oke dan mau dipakai harian. Build installer lalu memasangnya diam-diam di PC ini (~1 menit). Versi lama ditutup, versi baru langsung jalan di tray, pengaturan tetap. |
+| `npm test` | `node --check`, cek hash CSP, dan tes converter/tools. Tes yang butuh LibreOffice/ffmpeg/Poppler dilewati kalau programnya tidak ada. |
+| `npm run dist` | Hanya membuat installer di `dist/` (misalnya untuk dipasang di PC lain). |
 
-Tes yang butuh LibreOffice/ffmpeg/Poppler otomatis dilewati kalau programnya tidak ada. Setelah mengedit `<style>` atau `<script>` di `overlay.html`, perbarui hash CSP dengan `node test/check.js --fix`.
+Alurnya: edit kode → coba dengan `npm run dev` → `npm test` → commit dan push → `npm run pasang`.
+
+Setelah mengedit `<style>` atau `<script>` di `overlay.html` atau `hud.html`, perbarui hash CSP dengan `node test/check.js --fix` (kalau lupa, overlay tampil tanpa gaya dan `npm test` gagal).
 
 Kategori dan format tujuan diatur di satu tempat: `CATEGORIES` di `converter.js`. Tools ada di `TOOLS` di `tools.js`, aksi file di `ACTIONS` di `main.js`. Roda dibangun dari ketiganya.
 
@@ -94,9 +100,9 @@ Dokumen, spreadsheet, dan presentasi belum punya tools.
 
 Berlaku untuk file apa pun, termasuk folder dan pilihan campuran:
 
-- **Salin Path**: path lengkap ke clipboard sebagai teks, satu baris per item.
+- **Salin path**: path lengkap ke clipboard sebagai teks, satu baris per item.
 - **Salin**: file ke clipboard, siap di-paste di Explorer.
-- **Salin Ke… / Pindah Ke…**: pilih folder tujuan. Nama yang bentrok jadi `nama (1)`.
+- **Salin ke / Pindah ke**: pilih folder tujuan. Nama yang bentrok jadi `nama (1)`.
 - **Terminal**: buka folder (atau folder tempat file berada) di Windows Terminal, atau Command Prompt kalau Windows Terminal tidak ada.
 - **Explorer**: tampilkan item di Explorer.
 
