@@ -8,7 +8,6 @@ const { convert, uniquePath, CATEGORIES, FALLBACK_TARGETS } = require('./convert
 const { TOOLS, toolTasks } = require('./tools');
 
 const APP_ID = 'com.local.shiftwheel'; // harus sama dengan build.appId di package.json
-const ICON = path.join(__dirname, 'assets', 'icon.png');
 const OVERLAY_W = 360;
 const OVERLAY_H = 380;
 const HUD_W = 340;
@@ -495,13 +494,11 @@ function buildMenu() {
   ]);
 }
 
-// Ikon tray tajam di semua skala: 16, 24, dan 32 px dari icon.png
 function trayImage() {
-  const src = nativeImage.createFromPath(ICON);
+  // tray-16/24/32.png digambar khusus per ukuran oleh scripts/make-ico.js (lebih tajam dari hasil resize)
   const img = nativeImage.createEmpty();
-  for (const scaleFactor of [1, 1.5, 2]) {
-    const size = Math.round(16 * scaleFactor);
-    img.addRepresentation({ scaleFactor, buffer: src.resize({ width: size, height: size, quality: 'best' }).toPNG() });
+  for (const [scaleFactor, size] of [[1, 16], [1.5, 24], [2, 32]]) {
+    img.addRepresentation({ scaleFactor, buffer: fs.readFileSync(path.join(__dirname, 'assets', `tray-${size}.png`)) });
   }
   return img;
 }

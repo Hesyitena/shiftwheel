@@ -79,7 +79,7 @@ Setelah mengedit `<style>` atau `<script>` di `overlay.html` atau `hud.html`, pe
 
 Kategori dan format tujuan diatur di satu tempat: `CATEGORIES` di `converter.js`. Tools ada di `TOOLS` di `tools.js`, aksi file di `ACTIONS` di `main.js`. Roda dibangun dari ketiganya.
 
-Ikon: `assets/icon.png` (64×64). `npm run dist` otomatis membuat `build/icon.ico` (16, 32, 48, 256) lewat `scripts/make-ico.js`.
+Ikon digambar dari kode di `scripts/make-ico.js`: tile hitam dengan roda putih yang satu segmennya menyala. Skrip itu membuat `assets/icon.svg`, `assets/icon.png`, ikon tray `assets/tray-16/24/32.png`, dan `build/icon.ico` (16–256 px). Ukuran ≤ 32 px memakai versi 4 segmen yang lebih tebal supaya tetap tajam. `npm run dist` menjalankannya otomatis.
 
 ## Roda konversi (Shift)
 
@@ -109,12 +109,13 @@ Hasil disimpan sebagai file baru, misalnya `foto (dikompres).jpg`. File asli tid
 
 | Tipe file | Tools |
 |---|---|
-| Gambar | **Kompres** (maks 2560 px, kualitas ~75; dilewati kalau hasilnya tidak lebih kecil), **50%**, **Putar** 90°, **Hitam Putih**, **Metadata** (hapus EXIF/lokasi), **Gabung PDF** (≥ 2 gambar jadi `Gabungan.pdf`) |
-| PDF | **Gabung** (≥ 2 PDF jadi `Gabungan.pdf`), **Pisah** per halaman (`nama hal 1.pdf`, …), **Putar** semua halaman 90°, **Metadata** (hapus judul/penulis/XMP) |
-| Video | **Kompres** (maks 1080p, CRF 28), **720p**, **Bisukan**, **Putar** 90° |
-| Audio | **Kompres** (MP3 128 kbps), **Normalisasi** (loudnorm −16 LUFS), **Mono** |
+| Gambar | **Kompres** (maks 2560 px, kualitas ~75; dilewati kalau hasilnya tidak lebih kecil), **50%**, **Putar** 90°, **Hitam putih**, **Metadata** (hapus EXIF/lokasi), **Cermin**, **Pangkas tepi** (buang pinggiran polos), **Persegi** 1:1 (crop pintar ke bagian paling menonjol), **Gabung PDF** (≥ 2 gambar jadi `Gabungan.pdf`) |
+| PDF | **Gabung** (≥ 2 PDF jadi `Gabungan.pdf`), **Pisah** per halaman (`nama hal 1.pdf`, …), **Putar** semua halaman 90°, **Metadata** (hapus judul/penulis/XMP), **Nomor hal.** ("1 / 5" di bawah tiap halaman), **Balik urutan** halaman |
+| Video | **Kompres** (maks 1080p, CRF 28), **720p**, **Bisukan**, **Putar** 90°, **Thumbnail** (JPG dari tengah video), **2× cepat** |
+| Audio | **Kompres** (MP3 128 kbps), **Normalisasi** (loudnorm −16 LUFS), **Mono**, **Kurangi bising** (afftdn), **Potong hening** di awal/akhir, **1,5× cepat** (nada tetap), **Fade** in/out |
+| Dokumen, spreadsheet, presentasi | **Gabung PDF** (≥ 2 file jadi satu `Gabungan.pdf`), **Per halaman / Per slide** (tiap halaman jadi PNG) |
 
-Dokumen, spreadsheet, dan presentasi belum punya tools.
+Tools dokumen/spreadsheet/presentasi memakai LibreOffice; "Per halaman" juga butuh Poppler.
 
 ## Roda aksi file (Alt)
 

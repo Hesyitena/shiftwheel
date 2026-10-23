@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-k4XH6ddcOXIK/BdQJW1k42zfKYJGVuRkinxqX4sKE5w='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-5jyZiyWJrPxZOICpCqe8EqvpMtoHvotu8GnO4EOm3zU='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -101,6 +101,16 @@
     'move-to': 'M3 6h6l2 2h10v11H3zM8 14h7M12 11l3 3-3 3',
     terminal: 'M3 5h18v14H3zM7 10l3 2-3 2M12 15h4',
     folder: 'M3 6h6l2 2h10v11H3zM3 11h18',
+    flip: 'M12 3v18M9 7l-6 5 6 5zM15 7l6 5-6 5z',
+    crop: 'M6 2v16h16M2 6h16v16',
+    square: 'M4 4h16v16H4zM9 9h6v6H9z',
+    hash: 'M5 9h14M5 15h14M10 4L8 20M16 4l-2 16',
+    reverse: 'M7 20V4M4 7l3-3 3 3M17 4v16M14 17l3 3 3-3',
+    image: 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9h.01',
+    fast: 'M3 6l8 6-8 6zM12 6l8 6-8 6z',
+    denoise: 'M3 12c1.5-4 3-4 4.5 0s3 4 4.5 0 3-4 4.5 0 3 4 4.5 0',
+    scissors: 'M8.5 6a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M8.5 18a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M8 7.5L20 17M8 16.5L20 7',
+    fade: 'M3 19L9 5h6l6 14',
   };
 
   // ---------- Suara: disintesis WebAudio, pendek dan pelan ----------
@@ -263,8 +273,14 @@
       if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
       const [x, y] = point((R + r) / 2, mid);
       if (ICONS[item.icon]) {
-        g.append(el('path', { class: 'icon', d: ICONS[item.icon], transform: `translate(${(x - 9).toFixed(1)} ${(y - 17).toFixed(1)}) scale(.75)` }));
-        g.append(el('text', { class: 'name', x, y: y + 11 }, item.label));
+        // Label panjang dipecah dua baris supaya muat di roda dengan banyak segmen
+        const words = item.label.split(' ');
+        const lines = item.label.length > 9 && words.length > 1 ? [words[0], words.slice(1).join(' ')] : [item.label];
+        const lift = (lines.length - 1) * 6;
+        g.append(el('path', { class: 'icon', d: ICONS[item.icon], transform: `translate(${(x - 9).toFixed(1)} ${(y - 17 - lift).toFixed(1)}) scale(.75)` }));
+        const text = el('text', { class: 'name', x, y: y + 11 - lift });
+        lines.forEach((line, j) => text.append(el('tspan', { x, dy: j ? 12 : 0 }, line)));
+        g.append(text);
       } else {
         g.append(el('text', { class: 'fmt', x, y }, item.label));
       }
