@@ -8,8 +8,10 @@
   "private": true,
   "scripts": {
     "start": "electron .",
+    "dev": "node scripts/dev.js",
     "predist": "node scripts/make-ico.js",
     "dist": "electron-builder --win",
+    "pasang": "node scripts/pasang.js",
     "test": "node test/check.js && node test/converter.test.js"
   },
   "build": {
@@ -19,6 +21,7 @@
       "main.js",
       "preload.js",
       "overlay.html",
+      "hud.html",
       "converter.js",
       "tools.js",
       "assets/**"
