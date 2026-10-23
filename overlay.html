@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-pOP+7xods3WCsq3I9CIFzLwoe4VsBye8AFHERotc8zA='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-k4XH6ddcOXIK/BdQJW1k42zfKYJGVuRkinxqX4sKE5w='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -106,7 +106,7 @@
   // ---------- Suara: disintesis WebAudio, pendek dan pelan ----------
   // Nada >= 500 Hz supaya jelas di speaker laptop; tiap nada diberi harmonik oktaf supaya "nyaring".
   // Kompresor di ujung mencegah pecah kalau bunyi bertumpuk.
-  const sound = { on: true, ctx: null, out: null, last: 0, idle: 0, close: 0 };
+  const sound = { on: true, ctx: null, out: null, last: 0, close: 0 };
   function audio() {
     if (!sound.ctx) {
       sound.ctx = new AudioContext();
@@ -121,12 +121,11 @@
       sound.out.gain.value = 1;
       sound.out.connect(comp).connect(sound.ctx.destination);
     }
-    if (sound.ctx.state === 'suspended') sound.ctx.resume();
-    // Diam 1,5 dtk: suspend (CPU 0). Diam 30 dtk: tutup (proses audio ikut lepas dari memori).
-    clearTimeout(sound.idle);
+    // AudioContext yang hidup memakan CPU terus, jadi ditutup setelah 1,5 dtk diam.
+    // Sengaja close, bukan suspend: di Windows resume makin lambat makin lama tidurnya
+    // (diam 12 dtk -> ~440 ms), sedangkan membuat baru konsisten ~25-55 ms.
     clearTimeout(sound.close);
-    sound.idle = setTimeout(() => sound.ctx && sound.ctx.suspend(), 1500);
-    sound.close = setTimeout(() => { if (sound.ctx) sound.ctx.close(); sound.ctx = null; }, 30000);
+    sound.close = setTimeout(() => { if (sound.ctx) sound.ctx.close(); sound.ctx = null; }, 1500);
     return sound.ctx;
   }
   function tone(notes, { dur = 0.06, gain = 0.2, type = 'sine', step = 0.6, bright = 0.3 } = {}) {

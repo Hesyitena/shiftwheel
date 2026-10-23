@@ -56,7 +56,7 @@ Shiftwheel jalan terus di latar belakang, jadi dibuat sehemat mungkin:
 - **Tanpa proses jaringan.** Network service digabung ke proses utama (Shiftwheel tidak pernah memakai internet).
 - **Library berat dimuat saat dibutuhkan.** sharp (libvips) dan pdf-lib baru dimuat saat konversi pertama.
 - **Jendela progres dibuat saat perlu** dan dihancurkan lagi setelah selesai.
-- **Audio tidur saat diam.** Mesin suara disuspend 1,5 detik setelah bunyi terakhir dan ditutup setelah 30 detik.
+- **Audio mati saat diam.** Mesin suara ditutup 1,5 detik setelah bunyi terakhir dan dibuat lagi saat dibutuhkan (~25–55 ms; lebih cepat daripada membangunkan yang ditidurkan, yang di Windows bisa sampai ~440 ms).
 - **Hook tanpa `mousemove`.** Gerakan mouse sehari-hari tidak diproses; jarak drag dihitung sekali saat Shift/Ctrl/Alt diketuk.
 - LibreOffice, ffmpeg, dan OCR hanya jalan selama ada file yang diproses.
 
