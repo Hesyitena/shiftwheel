@@ -8,11 +8,13 @@ Konversi file ala [Tangerine](https://tangerineformac.com/) (macOS) untuk Window
 | **Ctrl** | Tools | kompres, 50%, putar, hitam putih, hapus metadata, gabung jadi PDF |
 | **Alt** | Aksi file | salin path, salin, salin ke…, pindah ke…, terminal, tampilkan di Explorer |
 
-Isi roda mengikuti tipe file yang di-drag; lubang tengahnya menunjukkan apa yang sedang dibawa (misalnya "2 gambar"). Keycap di bawah roda menunjukkan roda yang aktif; ketuk tombol lain untuk berganti roda. Lepas file di lubang tengah ("Batal") atau di luar roda, atau tekan **Esc**, untuk batal. Hasil disimpan di folder yang sama dengan file asal.
+Isi roda mengikuti tipe file yang di-drag. Bagian tengah roda menunjukkan apa yang sedang dibawa (misalnya "2 gambar"), lalu nama dan keterangan opsi yang sedang disorot. Bar kecil di bawah roda menunjukkan roda yang aktif; ketuk tombol lain untuk berganti roda. Lepas file di tengah ("Batal") atau di luar roda, atau tekan **Esc**, untuk batal. Hasil disimpan di folder yang sama dengan file asal.
 
 Kalau prosesnya lebih dari setengah detik, kartu progres kecil muncul di pojok kanan bawah (audio/video dengan persentase). Setelah selesai muncul notifikasi, misalnya "laporan.pdf siap"; klik untuk membuka foldernya.
 
-Shiftwheel berjalan di system tray tanpa jendela. Menu tray berisi **Aktif**, **Jalankan saat Windows menyala**, dan **Keluar**.
+Shiftwheel berjalan di system tray tanpa jendela. Menu tray berisi **Aktif**, **Suara**, **Jalankan saat Windows menyala**, dan **Keluar**.
+
+**Suara.** Efek suara pendek dan pelan saat roda muncul, saat pindah segmen, saat file di-drop atau dibatalkan, dan saat proses gagal. Chime "selesai" hanya berbunyi untuk proses yang lebih dari 1,5 detik, supaya konversi instan tidak ramai. Semua suara disintesis langsung (WebAudio), tanpa file audio. Matikan lewat **Suara** di menu tray; pilihannya tersimpan.
 
 ## Kebutuhan
 

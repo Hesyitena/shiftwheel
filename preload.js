@@ -5,8 +5,10 @@ const on = (channel) => (cb) => ipcRenderer.on(channel, (_e, payload) => cb(payl
 
 contextBridge.exposeInMainWorld('shiftwheel', {
   onConfig: on('overlay:config'),
+  onSettings: on('overlay:settings'),
   onShow: on('overlay:show'),
   onClose: on('overlay:close'),
+  onSound: on('overlay:sound'),
   onHud: on('hud:update'),
   onHudHide: on('hud:hide'),
 });
@@ -21,8 +23,8 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
-  const seg = e.target.closest ? e.target.closest('[data-id]') : null;
+  // Overlay menulis segmen yang sedang disorot ke body.dataset.pick (kosong = batal)
+  const id = document.body.dataset.pick || null;
   const paths = [...e.dataTransfer.files].map((f) => webUtils.getPathForFile(f)).filter(Boolean);
-  // id null = drop di tengah / di luar segmen = batal
-  ipcRenderer.send('overlay:drop', { id: seg ? seg.dataset.id : null, paths });
+  ipcRenderer.send('overlay:drop', { id, paths });
 });

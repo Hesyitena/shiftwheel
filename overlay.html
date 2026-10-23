@@ -2,101 +2,85 @@
 <html lang="id">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-bvtarDUqpx7IfWWAvi7Ja+Nej4jQPttSx6A7dYrHoqc='; style-src 'sha256-1L3mCz8is7LuYvbExZQ5vhYSrxwg1IjfH0aA7+8glrw='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-kl8fZmRaICp68XaSgYrttJCXYRxLaBA0liZTAYCn+a0='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
 <title>Shiftwheel</title>
 <style>
   :root {
-    --disc: #e9e6e0; --rim: rgba(255, 255, 255, .75); --face: #fbfaf7; --line: rgba(60, 45, 30, .13);
-    --ink: #1f1d1a; --muted: #8b857b; --hole: #ffffff; --accent: #f2601d; --accent-line: #d84f12;
-    --cancel: #f3ece9; --cancel-ink: #b4462a; --key: #fbfaf7; --key-edge: #cfc9bf;
-    --shadow: rgba(48, 32, 16, .22);
+    --surface: #ffffff; --line: rgba(0, 0, 0, .09); --ink: #111111; --sub: #6e6e73; --faint: #a1a1a6;
+    --invert: #ffffff; --danger: #d6361f; --shadow: 0 12px 40px rgba(0, 0, 0, .16), 0 1px 3px rgba(0, 0, 0, .10);
+    --tab: rgba(0, 0, 0, .06);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --disc: #262422; --rim: rgba(255, 255, 255, .06); --face: #34312d; --line: rgba(0, 0, 0, .45);
-      --ink: #f3f0ea; --muted: #9b958b; --hole: #1d1b19; --cancel: #3a2722; --cancel-ink: #ff9b7d;
-      --key: #34312d; --key-edge: #141312; --shadow: rgba(0, 0, 0, .6);
+      --surface: #161616; --line: rgba(255, 255, 255, .10); --ink: #f5f5f7; --sub: #98989d; --faint: #636366;
+      --invert: #111111; --danger: #ff6b55; --shadow: 0 12px 40px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04);
+      --tab: rgba(255, 255, 255, .09);
     }
   }
-  html, body { margin: 0; width: 360px; height: 430px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
-  body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); }
+  html, body { margin: 0; width: 360px; height: 380px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
   #stage { position: absolute; inset: 0; transform-origin: 180px 180px; }
-  #stage.pop { animation: pop 200ms cubic-bezier(.2, .9, .3, 1.25) backwards; }
-  #stage.closing { animation: out 140ms ease-in forwards; }
-  @keyframes pop { from { transform: scale(.82); opacity: 0; } }
-  @keyframes out { to { transform: scale(.94); opacity: 0; } }
+  #stage.pop { animation: pop 120ms ease-out backwards; }
+  #stage.closing { animation: out 100ms ease-in forwards; }
+  @keyframes pop { from { transform: scale(.96); opacity: 0; } }
+  @keyframes out { to { transform: scale(.98); opacity: 0; } }
 
-  svg { position: absolute; left: 0; top: 0; width: 360px; height: 360px; overflow: visible; }
-  .disc { fill: var(--disc); filter: drop-shadow(0 16px 26px var(--shadow)) drop-shadow(0 1px 2px var(--shadow)); }
-  .rim { fill: none; stroke: var(--rim); stroke-width: 1.5; }
-
-  /* Sudut segmen membulat dari stroke tebal; .edge sedikit lebih tebal jadi garis tepi tipis */
-  .seg { transform-box: view-box; transform-origin: 180px 180px; transition: transform 140ms cubic-bezier(.2, .9, .3, 1.4); }
-  .seg.enter { animation: segIn 220ms cubic-bezier(.2, .9, .3, 1.2) backwards; }
-  @keyframes segIn { from { opacity: 0; transform: scale(.88); } }
-  .seg .edge { fill: var(--line); stroke: var(--line); stroke-width: 9.5; stroke-linejoin: round; }
-  .seg .face { fill: var(--face); stroke: var(--face); stroke-width: 8; stroke-linejoin: round; transition: fill 120ms, stroke 120ms; }
-  .seg.hover { transform: translate(var(--dx), var(--dy)); filter: drop-shadow(0 6px 8px rgba(120, 45, 0, .28)); }
-  .seg.hover .face { fill: var(--accent); stroke: var(--accent); }
-  .seg.hover .edge { fill: var(--accent-line); stroke: var(--accent-line); }
-
+  svg { position: absolute; left: 0; top: 0; width: 360px; height: 360px; }
+  .disc { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: var(--shadow); }
+  .sep { stroke: var(--line); stroke-width: 1; }
+  .hl { fill: transparent; stroke: transparent; stroke-width: 6; stroke-linejoin: round; transition: fill 70ms, stroke 70ms; }
+  .seg.hover .hl { fill: var(--ink); stroke: var(--ink); }
   text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
-  .fmt { font-size: 13px; font-weight: 700; letter-spacing: .6px; }
-  .name { font-size: 11.5px; font-weight: 600; }
-  .icon { fill: none; stroke: var(--ink); stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-  .seg.hover text { fill: #ffffff; }
-  .seg.hover .icon { stroke: #ffffff; }
+  .fmt { font-size: 12.5px; font-weight: 600; letter-spacing: .3px; }
+  .name { font-size: 10.5px; font-weight: 500; fill: var(--sub); }
+  .icon { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .seg.hover text { fill: var(--invert); }
+  .seg.hover .icon { stroke: var(--invert); }
+  #hole circle { fill: transparent; }
 
-  #hole circle { fill: var(--hole); stroke: var(--line); stroke-width: 1; transition: fill 120ms; }
-  #hole.cancel circle { fill: var(--cancel); }
-  #big { font-size: 17px; font-weight: 700; }
-  #small { font-size: 11px; font-weight: 500; fill: var(--muted); }
-  #hole.cancel #big { fill: var(--cancel-ink); font-size: 14px; font-weight: 600; }
+  /* Teks tengah pakai HTML supaya bisa membungkus baris */
+  #center { position: absolute; left: 110px; top: 130px; width: 140px; height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+  #title { font-size: 15px; font-weight: 600; letter-spacing: -.1px; line-height: 1.25; }
+  #desc { margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--sub); }
+  #center.idle #title { font-size: 12px; font-weight: 500; color: var(--sub); }
+  #center.cancel #title { color: var(--danger); }
 
-  #keys { position: absolute; top: 348px; left: 0; right: 0; display: flex; justify-content: center; gap: 8px; }
-  .key {
-    min-width: 60px; padding: 4px 10px 5px; border-radius: 8px; text-align: center; background: var(--key);
-    box-shadow: 0 2px 0 var(--key-edge), 0 3px 8px var(--shadow); transition: transform 90ms, box-shadow 90ms;
+  #modes {
+    position: absolute; top: 342px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
+    background: var(--surface); border-radius: 9px; box-shadow: var(--shadow); white-space: nowrap;
   }
-  .key b { display: block; font-size: 12px; font-weight: 650; }
-  .key span { display: block; font-size: 10px; color: var(--muted); }
-  .key.on { transform: translateY(2px); box-shadow: 0 0 0 var(--key-edge), 0 1px 3px var(--shadow); }
-  .key.on b { color: var(--accent); }
-  /* Jendela transparan: caption butuh latar sendiri supaya terbaca di atas wallpaper apa pun */
-  #caption {
-    position: absolute; top: 398px; left: 50%; transform: translateX(-50%); white-space: nowrap;
-    padding: 3px 11px 4px; border-radius: 999px; background: var(--key); box-shadow: 0 2px 8px var(--shadow);
-    font-size: 12px; font-weight: 500; color: var(--ink);
-  }
-  #caption:empty { display: none; }
+  .mode { padding: 3px 9px; border-radius: 6px; font-size: 11.5px; font-weight: 500; color: var(--faint); transition: background 90ms, color 90ms; }
+  .mode kbd { font: inherit; font-size: 10.5px; margin-right: 4px; opacity: .8; }
+  .mode.on { background: var(--tab); color: var(--ink); }
 
   @media (prefers-reduced-motion: reduce) {
-    #stage.pop, #stage.closing, .seg.enter { animation: none; }
-    .seg, .seg .face, .key { transition: none; }
+    #stage.pop, #stage.closing { animation: none; }
+    .hl, .mode { transition: none; }
   }
 </style>
 </head>
 <body>
 <div id="stage">
+  <div id="discShadow"></div>
   <svg viewBox="0 0 360 360" aria-label="Shiftwheel">
-    <circle class="disc" cx="180" cy="180" r="160"/>
-    <circle class="rim" cx="180" cy="180" r="158.5"/>
+    <circle class="disc" cx="180" cy="180" r="146"/>
     <g id="segs"></g>
-    <g id="hole"><circle cx="180" cy="180" r="50"/><text id="big" x="180" y="180"></text><text id="small" x="180" y="194"></text></g>
+    <circle class="disc" cx="180" cy="180" r="80"/>
+    <g id="hole"><circle cx="180" cy="180" r="80"/></g>
   </svg>
-  <div id="keys">
-    <div class="key" data-mode="convert"><b>⇧ Shift</b><span>Konversi</span></div>
-    <div class="key" data-mode="tools"><b>Ctrl</b><span>Tools</span></div>
-    <div class="key" data-mode="actions"><b>Alt</b><span>Aksi</span></div>
+  <div id="center" class="idle"><div id="title"></div><div id="desc"></div></div>
+  <div id="modes">
+    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Konversi</div>
+    <div class="mode" data-mode="tools"><kbd>Ctrl</kbd>Tools</div>
+    <div class="mode" data-mode="actions"><kbd>Alt</kbd>Aksi</div>
   </div>
-  <div id="caption"></div>
 </div>
 <script>
   // Roda radial. Isi roda dikirim main (config); drop ditangani preload.js.
   const NS = 'http://www.w3.org/2000/svg';
-  const C = 180, R = 150, r = 62, PAD = 4, GAP = 6, LIFT = 6;
+  const C = 180, R = 146, r = 80, INSET = 6;
   const KIND = { image: 'gambar', pdf: 'PDF', document: 'dokumen', sheet: 'spreadsheet', slides: 'presentasi', audio: 'audio', video: 'video', unknown: 'file' };
-  const IDLE = { convert: 'Lepas di format tujuan', tools: 'Lepas di tool yang mau dipakai', actions: 'Lepas di aksi yang mau dijalankan' };
 
   // Ikon garis 24×24 untuk roda tools dan aksi
   const ICONS = {
@@ -119,8 +103,45 @@
     folder: 'M3 6h6l2 2h10v11H3zM3 11h18',
   };
 
+  // ---------- Suara: disintesis WebAudio, pendek dan pelan ----------
+  const sound = { on: true, ctx: null, last: 0 };
+  function tone(notes, { dur = 0.06, gain = 0.05, type = 'sine', step = 0.6 } = {}) {
+    if (!sound.on) return;
+    const ctx = sound.ctx || (sound.ctx = new AudioContext());
+    let t = ctx.currentTime;
+    for (const note of notes) {
+      const [from, to] = Array.isArray(note) ? note : [note, note];
+      const osc = ctx.createOscillator();
+      const amp = ctx.createGain();
+      osc.type = type;
+      osc.frequency.setValueAtTime(from, t);
+      if (to !== from) osc.frequency.exponentialRampToValueAtTime(to, t + dur);
+      amp.gain.setValueAtTime(0.0001, t);
+      amp.gain.exponentialRampToValueAtTime(gain, t + 0.004);
+      amp.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(amp).connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + dur + 0.02);
+      t += dur * step;
+    }
+  }
+  const SOUNDS = {
+    open: () => tone([[520, 760]], { dur: 0.07, gain: 0.04 }),
+    tick: () => tone([2000], { dur: 0.016, gain: 0.014, type: 'triangle' }),
+    select: () => tone([740, 1110], { dur: 0.07, gain: 0.05 }),
+    cancel: () => tone([[480, 300]], { dur: 0.09, gain: 0.035, type: 'triangle' }),
+    done: () => tone([784, 1175], { dur: 0.24, gain: 0.05, step: 0.45 }),
+    error: () => tone([247, 196], { dur: 0.13, gain: 0.045, type: 'triangle', step: 0.9 }),
+  };
+  function play(name) {
+    // Ketukan hover dibatasi supaya tidak berisik saat kursor menyapu banyak segmen
+    if (name === 'tick') { if (performance.now() - sound.last < 35) return; sound.last = performance.now(); }
+    if (SOUNDS[name]) SOUNDS[name]();
+  }
+
+  // ---------- Roda ----------
   const $ = (id) => document.getElementById(id);
-  const stage = $('stage'), segs = $('segs'), hole = $('hole'), big = $('big'), small = $('small'), caption = $('caption');
+  const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
   const state = { config: null, mode: 'convert', category: null, count: 0 };
   let hover = null; // segmen yang disorot, atau lubang tengah (batal)
   let emptyText = '';
@@ -154,73 +175,70 @@
   }
 
   const point = (rad, deg) => [C + rad * Math.cos(deg * Math.PI / 180), C + rad * Math.sin(deg * Math.PI / 180)];
+  const fmt = (p) => p.map((v) => v.toFixed(1)).join(' ');
 
-  // Segmen cincin dengan celah selebar GAP (tepi sejajar, bukan radial)
-  function segmentPath(a1, a2) {
-    const ro = R - PAD, ri = r + PAD, d = GAP / 2 + PAD;
+  // Sorotan: sektor cincin yang menjorok INSET px dari tepi, sudut membulat dari stroke tebal
+  function sectorPath(a1, a2) {
+    const ro = R - INSET, ri = r + INSET, d = INSET / 2 + 1;
     const off = (rad) => Math.asin(Math.min(1, d / rad)) * 180 / Math.PI;
     const o1 = a1 + off(ro), o2 = a2 - off(ro), i1 = a1 + off(ri), i2 = a2 - off(ri);
-    const f = (p) => p.map((v) => v.toFixed(1)).join(' ');
-    return `M${f(point(ro, o1))}A${ro} ${ro} 0 ${o2 - o1 > 180 ? 1 : 0} 1 ${f(point(ro, o2))}` +
-      `L${f(point(ri, i2))}A${ri} ${ri} 0 ${i2 - i1 > 180 ? 1 : 0} 0 ${f(point(ri, i1))}Z`;
+    return `M${fmt(point(ro, o1))}A${ro} ${ro} 0 ${o2 - o1 > 180 ? 1 : 0} 1 ${fmt(point(ro, o2))}` +
+      `L${fmt(point(ri, i2))}A${ri} ${ri} 0 ${i2 - i1 > 180 ? 1 : 0} 0 ${fmt(point(ri, i1))}Z`;
   }
 
-  // Lubang tengah: isi drag ("2 gambar"), opsi yang disorot, atau "Batal"
   function paintCenter() {
-    hole.classList.toggle('cancel', hover === hole);
-    let b = '', s = '';
-    if (hover === hole) b = 'Batal';
-    else if (hover) b = hover.dataset.label;
-    else if (state.category) { b = String(state.count || 1); s = KIND[state.category]; }
-    big.textContent = b;
-    small.textContent = s;
-    big.setAttribute('y', s ? 172 : 180);
-  }
-
-  function paintCaption() {
-    if (hover === hole) caption.textContent = 'Lepas di sini untuk batal';
-    else if (hover) caption.textContent = hover.dataset.caption;
-    else caption.textContent = !state.category ? '' : emptyText || IDLE[state.mode];
+    let t = '', d = '';
+    if (hover === hole) { t = 'Batal'; d = 'Lepas di sini'; }
+    else if (hover) { t = hover.dataset.label; d = hover.dataset.caption; }
+    else if (emptyText) t = emptyText;
+    else if (state.category) t = `${state.count || 1} ${KIND[state.category]}`;
+    center.classList.toggle('idle', !hover);
+    center.classList.toggle('cancel', hover === hole);
+    title.textContent = t;
+    desc.textContent = d === t ? '' : d;
   }
 
   function setHover(target) {
     if (target === hover) return;
     if (hover && hover !== hole) hover.classList.remove('hover');
     hover = target;
-    if (hover && hover !== hole) hover.classList.add('hover');
+    if (hover && hover !== hole) {
+      hover.classList.add('hover');
+      play('tick');
+    }
+    // preload.js membaca pilihan ini saat drop, jadi yang disorot = yang dijalankan
+    document.body.dataset.pick = hover && hover !== hole ? hover.dataset.id : '';
     paintCenter();
-    paintCaption();
   }
 
   function render() {
     hover = null;
+    document.body.dataset.pick = '';
     segs.replaceChildren();
-    for (const key of document.querySelectorAll('.key')) key.classList.toggle('on', key.dataset.mode === state.mode);
-    const list = items() || [];
-    emptyText = items() && !list.length
-      ? (state.mode === 'tools' ? `Belum ada tools untuk ${KIND[state.category]}` : 'Belum ada pilihan untuk file ini')
+    for (const m of document.querySelectorAll('.mode')) m.classList.toggle('on', m.dataset.mode === state.mode);
+    const all = items();
+    const list = all || [];
+    emptyText = all && !list.length
+      ? (state.mode === 'tools' ? `Belum ada tools untuk ${KIND[state.category]}` : 'Belum ada pilihan')
       : '';
     const step = 360 / list.length;
     list.forEach((item, i) => {
       const mid = -90 + i * step;
-      const g = el('g', { class: 'seg enter', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption });
-      const [dx, dy] = [LIFT * Math.cos(mid * Math.PI / 180), LIFT * Math.sin(mid * Math.PI / 180)];
-      g.style.setProperty('--dx', `${dx.toFixed(1)}px`);
-      g.style.setProperty('--dy', `${dy.toFixed(1)}px`);
-      g.style.animationDelay = `${i * 18}ms`;
-      const d = segmentPath(mid - step / 2, mid + step / 2);
-      g.append(el('path', { class: 'edge', d }), el('path', { class: 'face', d }));
+      const a1 = mid - step / 2;
+      const g = el('g', { class: 'seg', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption });
+      // Area sentuh = sektor penuh (transparan); sorotan = sektor yang menjorok ke dalam
+      g.append(el('path', { d: sectorPath(a1, mid + step / 2), class: 'hl' }));
+      if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
       const [x, y] = point((R + r) / 2, mid);
       if (ICONS[item.icon]) {
-        g.append(el('path', { class: 'icon', d: ICONS[item.icon], transform: `translate(${(x - 10).toFixed(1)} ${(y - 20).toFixed(1)}) scale(.8333)` }));
-        g.append(el('text', { class: 'name', x, y: y + 12 }, item.label));
+        g.append(el('path', { class: 'icon', d: ICONS[item.icon], transform: `translate(${(x - 9).toFixed(1)} ${(y - 17).toFixed(1)}) scale(.75)` }));
+        g.append(el('text', { class: 'name', x, y: y + 11 }, item.label));
       } else {
         g.append(el('text', { class: 'fmt', x, y }, item.label));
       }
       segs.append(g);
     });
     paintCenter();
-    paintCaption();
   }
 
   document.addEventListener('dragover', (e) => {
@@ -230,11 +248,25 @@
       state.category = categoryOf(files.map((i) => i.type));
       render();
     }
-    setHover(e.target.closest ? e.target.closest('[data-id], #hole') : null);
+    // Seluruh sektor jadi area sentuh, bukan hanya teks/sorotan
+    setHover(segmentAt(e.clientX, e.clientY));
   });
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) setHover(null); });
+  document.addEventListener('drop', () => play(hover && hover !== hole ? 'select' : 'cancel'));
+
+  // Cari segmen dari sudut & jarak kursor ke pusat
+  function segmentAt(x, y) {
+    const dist = Math.hypot(x - C, y - C);
+    if (dist < r) return hole;
+    const list = segs.querySelectorAll('.seg');
+    if (dist > R + 4 || !list.length) return null;
+    const angle = (Math.atan2(y - C, x - C) * 180 / Math.PI + 90 + 360 / list.length / 2 + 360) % 360;
+    return list[Math.floor(angle / (360 / list.length))] || null;
+  }
 
   window.shiftwheel.onConfig((config) => { state.config = config; render(); });
+  window.shiftwheel.onSettings((s) => { sound.on = s.sound; });
+  window.shiftwheel.onSound(play);
 
   // Roda muncul (fresh) atau berganti mode karena tombol lain diketuk
   window.shiftwheel.onShow(({ mode, fresh }) => {
@@ -246,6 +278,7 @@
       void stage.offsetWidth; // putar ulang animasi
       stage.classList.add('pop');
     }
+    play(fresh ? 'open' : 'tick');
     render();
   });
 

@@ -10,7 +10,7 @@ const { TOOLS, toolTasks } = require('./tools');
 const APP_ID = 'com.local.shiftwheel'; // harus sama dengan build.appId di package.json
 const ICON = path.join(__dirname, 'assets', 'icon.png');
 const OVERLAY_W = 360;
-const OVERLAY_H = 430;
+const OVERLAY_H = 380;
 const HUD_W = 340;
 const HUD_H = 92;
 const HUD_DELAY = 600; // ms sebelum HUD progres muncul
@@ -37,6 +37,7 @@ app.setAppUserModelId(app.isPackaged ? APP_ID : process.execPath);
 const hidden = process.argv.includes('--hidden');
 let convertOnly = parseConvert(process.argv) !== null;
 let enabled = true;
+let soundOn = true; // dari settings.json, bisa diubah di menu tray
 let tray = null;
 let overlay = null;
 
@@ -100,7 +101,7 @@ let batch = newBatch();
 let quitTimer = null;
 
 function newBatch() {
-  return { ok: 0, fail: 0, skip: 0, done: 0, total: 0, lastOut: null, note: null, label: null };
+  return { ok: 0, fail: 0, skip: 0, done: 0, total: 0, lastOut: null, note: null, label: null, started: 0 };
 }
 
 function updateProgress() {
@@ -113,6 +114,7 @@ function enqueueTasks(tasks) {
   for (const task of tasks) {
     pending++;
     batch.total++;
+    batch.started = batch.started || Date.now();
     batch.label = batch.label === null || batch.label === task.label ? task.label : 'Selesai diproses';
     queue = queue.then(async () => {
       updateProgress();
@@ -148,9 +150,12 @@ function enqueue(files, fmt) {
 }
 
 function finishBatch() {
-  const { ok, fail, skip, total, lastOut, note, label } = batch;
+  const { ok, fail, skip, total, lastOut, note, label, started } = batch;
   batch = newBatch();
   const open = lastOut ? () => shell.showItemInFolder(lastOut) : null;
+  // Chime selesai hanya untuk proses lama; yang instan cukup bunyi "pilih" saat drop
+  if (fail) playSound('error');
+  else if (ok && Date.now() - started > 1500) playSound('done');
   if (!fail && !skip) {
     notify(ok === 1 ? `${path.basename(lastOut)} siap` : `${ok} file selesai`, `${label}. Klik untuk membuka foldernya.`, open);
   } else if (!ok && !fail) {
@@ -195,6 +200,7 @@ function floatingWindow(width, height) {
       nodeIntegration: false,
       backgroundThrottling: false,
       spellcheck: false,
+      autoplayPolicy: 'no-user-gesture-required', // suara overlay tanpa klik dulu
     },
   });
   win.setAlwaysOnTop(true, 'screen-saver');
@@ -298,6 +304,7 @@ async function runAction(id, paths) {
     const result = await action.run(existing);
     if (result) notify(result.msg, result.reveal ? 'Klik untuk membuka foldernya.' : '', result.reveal ? () => shell.showItemInFolder(result.reveal) : null);
   } catch (err) {
+    playSound('error');
     notify(`${action.label} gagal`, err.message);
   }
 }
@@ -341,7 +348,10 @@ let hideTimer = null;
 function createOverlay() {
   overlay = floatingWindow(OVERLAY_W, OVERLAY_H);
   overlay.loadFile(path.join(__dirname, 'overlay.html'));
-  overlay.webContents.on('did-finish-load', () => overlay.webContents.send('overlay:config', wheelConfig()));
+  overlay.webContents.on('did-finish-load', () => {
+    overlay.webContents.send('overlay:config', wheelConfig());
+    overlay.webContents.send('overlay:settings', { sound: soundOn });
+  });
   overlay.on('session-end', stopHook); // logoff / shutdown Windows
 }
 
@@ -372,6 +382,11 @@ function scheduleHide() {
   hideTimer = setTimeout(() => overlay && overlay.hide(), HIDE_DELAY);
 }
 
+// Suara dimainkan di jendela overlay (main process tidak punya audio)
+function playSound(name) {
+  if (soundOn && overlay) overlay.webContents.send('overlay:sound', name);
+}
+
 function hideNow() {
   shown = false;
   clearTimeout(hideTimer);
@@ -387,7 +402,10 @@ const held = new Set(); // abaikan auto-repeat saat tombol ditahan
 let hookRunning = false;
 
 uIOhook.on('keydown', (e) => {
-  if (e.keycode === UiohookKey.Escape) return hideNow();
+  if (e.keycode === UiohookKey.Escape) {
+    if (shown) playSound('cancel');
+    return hideNow();
+  }
   const mode = TRIGGER[e.keycode];
   if (!mode || held.has(e.keycode)) return;
   held.add(e.keycode);
@@ -447,6 +465,16 @@ function buildMenu() {
       },
     },
     {
+      label: 'Suara',
+      type: 'checkbox',
+      checked: soundOn,
+      click: (item) => {
+        soundOn = item.checked;
+        saveSettings({ ...loadSettings(), sound: soundOn });
+        if (overlay) overlay.webContents.send('overlay:settings', { sound: soundOn });
+      },
+    },
+    {
       label: app.isPackaged ? 'Jalankan saat Windows menyala' : 'Jalankan saat Windows menyala (hanya versi terinstal)',
       type: 'checkbox',
       checked: app.isPackaged && isAutostart(),
@@ -487,6 +515,7 @@ function startBackground() {
 
   const settings = loadSettings();
   const firstRun = settings.firstRun !== false;
+  soundOn = settings.sound !== false;
   if (firstRun) {
     setAutostart(true);
     saveSettings({ ...settings, firstRun: false });
