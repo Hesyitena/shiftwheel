@@ -7,6 +7,10 @@ const { pathToFileURL } = require('url');
 const sharp = require('sharp');
 const { PDFDocument } = require('pdf-lib');
 
+// Cache libvips membiarkan file input tetap terbuka; di Windows file itu jadi tidak bisa
+// dihapus/dipindah selama Shiftwheel jalan. Tiap file cuma diproses sekali, jadi cache tidak perlu.
+sharp.cache(false);
+
 // Kategori file: ekstensi sumber dan format tujuan yang tampil di roda konversi
 const CATEGORIES = {
   image: { name: 'Gambar', exts: ['png', 'jpg', 'webp', 'gif', 'tiff', 'avif', 'bmp', 'heic', 'svg'], targets: ['jpg', 'png', 'webp', 'avif', 'tiff', 'gif', 'bmp', 'pdf'] },
@@ -253,12 +257,18 @@ async function viaLibreOffice(input, out, fmt) {
       '--outdir', tmp,
       input,
     ];
-    try {
-      await run(findSoffice(), args);
-    } catch (err) {
-      if (err.code === 'ENOENT') throw new Error('LibreOffice tidak ditemukan. Install LibreOffice dulu.');
-      if (err.killed) throw new Error('LibreOffice terlalu lama merespons (lebih dari 2 menit).');
-      throw new Error('LibreOffice gagal mengonversi file.');
+    // Coba ulang sekali: start pertama LibreOffice (membuat profil) atau profil yang sedang
+    // dipakai proses lain kadang gagal tanpa alasan jelas, percobaan kedua biasanya berhasil.
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await run(findSoffice(), args);
+      } catch (err) {
+        if (err.code === 'ENOENT') throw new Error('LibreOffice tidak ditemukan. Install LibreOffice dulu.');
+        if (err.killed) throw new Error('LibreOffice terlalu lama merespons (lebih dari 2 menit).');
+        if (attempt < 2) continue;
+        throw new Error(`LibreOffice gagal mengonversi file. ${lastLine(err.stderr)}`.trim());
+      }
+      if (attempt >= 2 || readdir(tmp).some((f) => extOf(f) === ext)) break;
     }
     const produced = readdir(tmp).find((f) => extOf(f) === ext);
     if (!produced) throw new Error('LibreOffice tidak menghasilkan file. Pastikan file tidak rusak atau terkunci.');

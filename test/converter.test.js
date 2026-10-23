@@ -214,6 +214,15 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
     assert.strictEqual(fodtToText(xml), 'judul & <x> é\na  b kanan\n\nhal 2');
   });
 
+  await test('file input tidak terkunci setelah diproses (bisa dihapus)', async () => {
+    // Regresi: cache libvips dulu memegang file GIF yang sudah dikonversi
+    await sharp({ create: { width: 50, height: 50, channels: 3, background: '#888' } }).gif().toFile(p('kunci.gif'));
+    await convert(p('kunci.gif'), 'png');
+    await runTool('image.rotate', [p('kunci.gif')]);
+    fs.rmSync(p('kunci.gif'));
+    fs.rmSync(p('foto.jpg')); // sudah dibaca banyak tools di atas
+  });
+
   // ---------- Kasus error ----------
   await test('format sama dilewati', () =>
     assert.rejects(convert(p('catatan.txt'), 'txt'), (e) => e.skipped === true && e.message === 'Sudah berformat TXT'));
