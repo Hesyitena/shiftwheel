@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-5jyZiyWJrPxZOICpCqe8EqvpMtoHvotu8GnO4EOm3zU='; style-src 'sha256-QpXrHLkarDBG/t47f//VLD0H/2jEQUHD6OWjWE+Wat0='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-E20zJsT7XtwjBo0tefDD0RRQmUVjUJin8qnFK1Q4SxY='; style-src 'sha256-RA5ReUh0c+OrPwIjG+kgSrmiuoHGdQHJg+ItFJ4RnDA='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -39,7 +39,7 @@
   .seg.hover .icon { stroke: var(--invert); }
   #hole circle { fill: transparent; }
 
-  /* Teks tengah pakai HTML supaya bisa membungkus baris */
+  /* Center text is HTML so it can wrap */
   #center { position: absolute; left: 110px; top: 130px; width: 140px; height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
   #title { font-size: 15px; font-weight: 600; letter-spacing: -.1px; line-height: 1.25; }
   #desc { margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--sub); }
@@ -71,18 +71,22 @@
   </svg>
   <div id="center" class="idle"><div id="title"></div><div id="desc"></div></div>
   <div id="modes">
-    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Konversi</div>
+    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Convert</div>
     <div class="mode" data-mode="tools"><kbd>Ctrl</kbd>Tools</div>
-    <div class="mode" data-mode="actions"><kbd>Alt</kbd>Aksi</div>
+    <div class="mode" data-mode="actions"><kbd>Alt</kbd>Actions</div>
   </div>
 </div>
 <script>
-  // Roda radial. Isi roda dikirim main (config); drop ditangani preload.js.
+  // Radial wheel. Main sends the contents (config); drops are handled by preload.js.
   const NS = 'http://www.w3.org/2000/svg';
   const C = 180, R = 146, r = 80, INSET = 6;
-  const KIND = { image: 'gambar', pdf: 'PDF', document: 'dokumen', sheet: 'spreadsheet', slides: 'presentasi', audio: 'audio', video: 'video', unknown: 'file' };
+  // [singular, plural] for the center text, e.g. "1 image", "2 images"
+  const KIND = {
+    image: ['image', 'images'], pdf: ['PDF', 'PDFs'], document: ['document', 'documents'], sheet: ['spreadsheet', 'spreadsheets'],
+    slides: ['presentation', 'presentations'], audio: ['audio file', 'audio files'], video: ['video', 'videos'], unknown: ['file', 'files'],
+  };
 
-  // Ikon garis 24×24 untuk roda tools dan aksi
+  // 24×24 line icons for the tools and actions wheels
   const ICONS = {
     compress: 'M4 14h6v6M20 10h-6V4M14 10l6-6M4 20l6-6',
     half: 'M4 4h16v16H4zM4 12h8v8',
@@ -113,15 +117,15 @@
     fade: 'M3 19L9 5h6l6 14',
   };
 
-  // ---------- Suara: disintesis WebAudio, pendek dan pelan ----------
-  // Nada >= 500 Hz supaya jelas di speaker laptop; tiap nada diberi harmonik oktaf supaya "nyaring".
-  // Kompresor di ujung mencegah pecah kalau bunyi bertumpuk.
+  // ---------- Sound: synthesized with WebAudio, short ----------
+  // Tones >= 500 Hz so they come through laptop speakers; each tone gets an octave harmonic for presence.
+  // A limiter at the end keeps overlapping sounds from clipping.
   const sound = { on: true, ctx: null, out: null, last: 0, close: 0 };
   function audio() {
     if (!sound.ctx) {
       sound.ctx = new AudioContext();
       const comp = sound.ctx.createDynamicsCompressor();
-      // Limiter: hanya bekerja di dekat 0 dB, jadi volume normal tidak ikut ditekan
+      // Limiter: only kicks in near 0 dB, so normal levels are left alone
       comp.threshold.value = -2;
       comp.knee.value = 0;
       comp.ratio.value = 20;
@@ -131,9 +135,9 @@
       sound.out.gain.value = 1;
       sound.out.connect(comp).connect(sound.ctx.destination);
     }
-    // AudioContext yang hidup memakan CPU terus, jadi ditutup setelah 1,5 dtk diam.
-    // Sengaja close, bukan suspend: di Windows resume makin lambat makin lama tidurnya
-    // (diam 12 dtk -> ~440 ms), sedangkan membuat baru konsisten ~25-55 ms.
+    // A live AudioContext burns CPU constantly, so it closes after 1.5 s of silence.
+    // Close rather than suspend on purpose: on Windows, resume gets slower the longer it slept
+    // (12 s idle -> ~440 ms), while creating a new one is a steady ~25-55 ms.
     clearTimeout(sound.close);
     sound.close = setTimeout(() => { if (sound.ctx) sound.ctx.close(); sound.ctx = null; }, 1500);
     return sound.ctx;
@@ -146,7 +150,7 @@
       const [from, to] = Array.isArray(note) ? note : [note, note];
       const amp = ctx.createGain();
       amp.gain.setValueAtTime(0.0001, t);
-      // Naik cepat, tahan penuh ~40% durasi, lalu meluruh: bunyi pendek tetap terdengar jelas
+      // Fast attack, hold for ~40% of the duration, then decay: short sounds stay clearly audible
       amp.gain.exponentialRampToValueAtTime(gain, t + 0.003);
       amp.gain.setValueAtTime(gain, t + dur * 0.4);
       amp.gain.exponentialRampToValueAtTime(0.0001, t + dur);
@@ -168,24 +172,24 @@
   }
   const SOUNDS = {
     open: () => tone([[620, 940]], { dur: 0.09, gain: 0.55 }),
-    tick: () => tone([[1500, 1150]], { dur: 0.04, gain: 0.7, type: 'triangle', bright: 0.2 }), // pindah segmen
-    switch: () => tone([1050, 1400], { dur: 0.05, gain: 0.5, type: 'triangle', step: 0.85 }), // ganti roda
+    tick: () => tone([[1500, 1150]], { dur: 0.04, gain: 0.7, type: 'triangle', bright: 0.2 }), // moving between segments
+    switch: () => tone([1050, 1400], { dur: 0.05, gain: 0.5, type: 'triangle', step: 0.85 }), // switching wheels
     select: () => tone([880, 1320], { dur: 0.1, gain: 0.55 }),
     cancel: () => tone([[760, 470]], { dur: 0.14, gain: 0.5, type: 'triangle' }),
     done: () => tone([784, 1175, 1568], { dur: 0.24, gain: 0.45, step: 0.42 }),
     error: () => tone([523, 392], { dur: 0.17, gain: 0.55, type: 'triangle', step: 0.9 }),
   };
   function play(name) {
-    // Ketukan hover dibatasi supaya tidak berisik saat kursor menyapu banyak segmen
+    // Rate-limit hover ticks so sweeping across many segments doesn't get noisy
     if (name === 'tick') { if (performance.now() - sound.last < 30) return; sound.last = performance.now(); }
     if (SOUNDS[name]) SOUNDS[name]();
   }
 
-  // ---------- Roda ----------
+  // ---------- Wheel ----------
   const $ = (id) => document.getElementById(id);
   const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
   const state = { config: null, mode: 'convert', category: null, count: 0 };
-  let hover = null; // segmen yang disorot, atau lubang tengah (batal)
+  let hover = null; // highlighted segment, or the center hole (cancel)
   let emptyText = '';
 
   function el(tag, attrs, text) {
@@ -195,7 +199,7 @@
     return node;
   }
 
-  // Tebak kategori dari MIME yang diberi Windows saat drag (nama file belum terbaca di tahap ini)
+  // Guess the category from the MIME type Windows gives during the drag (file names aren't readable yet)
   function categoryOf(types) {
     const t = types.find(Boolean) || '';
     if (t === 'application/pdf') return 'pdf';
@@ -210,7 +214,7 @@
 
   function items() {
     const { config, mode, category, count } = state;
-    if (!config || !category) return null; // file belum masuk ke jendela
+    if (!config || !category) return null; // the file hasn't entered the window yet
     if (mode === 'actions') return config.actions;
     const list = mode === 'convert' ? config.convert[category] || config.convert.fallback : config.tools[category] || [];
     return list.filter((item) => !item.multi || count > 1);
@@ -219,7 +223,7 @@
   const point = (rad, deg) => [C + rad * Math.cos(deg * Math.PI / 180), C + rad * Math.sin(deg * Math.PI / 180)];
   const fmt = (p) => p.map((v) => v.toFixed(1)).join(' ');
 
-  // Sorotan: sektor cincin yang menjorok INSET px dari tepi, sudut membulat dari stroke tebal
+  // Highlight: a ring sector inset INSET px from the edges, corners rounded by a thick stroke
   function sectorPath(a1, a2) {
     const ro = R - INSET, ri = r + INSET, d = INSET / 2 + 1;
     const off = (rad) => Math.asin(Math.min(1, d / rad)) * 180 / Math.PI;
@@ -230,10 +234,10 @@
 
   function paintCenter() {
     let t = '', d = '';
-    if (hover === hole) { t = 'Batal'; d = 'Lepas di sini'; }
+    if (hover === hole) { t = 'Cancel'; d = 'Drop here'; }
     else if (hover) { t = hover.dataset.label; d = hover.dataset.caption; }
     else if (emptyText) t = emptyText;
-    else if (state.category) t = `${state.count || 1} ${KIND[state.category]}`;
+    else if (state.category) { const n = state.count || 1; t = `${n} ${KIND[state.category][n === 1 ? 0 : 1]}`; }
     center.classList.toggle('idle', !hover);
     center.classList.toggle('cancel', hover === hole);
     title.textContent = t;
@@ -248,7 +252,7 @@
       hover.classList.add('hover');
       play('tick');
     }
-    // preload.js membaca pilihan ini saat drop, jadi yang disorot = yang dijalankan
+    // preload.js reads this on drop, so what is highlighted is what runs
     document.body.dataset.pick = hover && hover !== hole ? hover.dataset.id : '';
     paintCenter();
   }
@@ -261,19 +265,19 @@
     const all = items();
     const list = all || [];
     emptyText = all && !list.length
-      ? (state.mode === 'tools' ? `Belum ada tools untuk ${KIND[state.category]}` : 'Belum ada pilihan')
+      ? (state.mode === 'tools' ? `No tools for ${KIND[state.category][1]} yet` : 'Nothing here yet')
       : '';
     const step = 360 / list.length;
     list.forEach((item, i) => {
       const mid = -90 + i * step;
       const a1 = mid - step / 2;
       const g = el('g', { class: 'seg', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption });
-      // Area sentuh = sektor penuh (transparan); sorotan = sektor yang menjorok ke dalam
+      // Hit area = the full sector (transparent); highlight = the inset sector
       g.append(el('path', { d: sectorPath(a1, mid + step / 2), class: 'hl' }));
       if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
       const [x, y] = point((R + r) / 2, mid);
       if (ICONS[item.icon]) {
-        // Label panjang dipecah dua baris supaya muat di roda dengan banyak segmen
+        // Long labels wrap onto two lines so they fit on wheels with many segments
         const words = item.label.split(' ');
         const lines = item.label.length > 9 && words.length > 1 ? [words[0], words.slice(1).join(' ')] : [item.label];
         const lift = (lines.length - 1) * 6;
@@ -296,13 +300,13 @@
       state.category = categoryOf(files.map((i) => i.type));
       render();
     }
-    // Seluruh sektor jadi area sentuh, bukan hanya teks/sorotan
+    // The whole sector is the hit area, not just the text/highlight
     setHover(segmentAt(e.clientX, e.clientY));
   });
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) setHover(null); });
   document.addEventListener('drop', () => play(hover && hover !== hole ? 'select' : 'cancel'));
 
-  // Cari segmen dari sudut & jarak kursor ke pusat
+  // Find the segment from the cursor's angle and distance to the center
   function segmentAt(x, y) {
     const dist = Math.hypot(x - C, y - C);
     if (dist < r) return hole;
@@ -316,21 +320,21 @@
   window.shiftwheel.onSettings((s) => { sound.on = s.sound; });
   window.shiftwheel.onSound(play);
 
-  // Roda muncul (fresh) atau berganti mode karena tombol lain diketuk
+  // The wheel appears (fresh) or switches mode because another key was tapped
   window.shiftwheel.onShow(({ mode, fresh }) => {
     state.mode = mode;
     if (fresh) {
       state.category = null;
       state.count = 0;
       stage.classList.remove('pop', 'closing');
-      void stage.offsetWidth; // putar ulang animasi
+      void stage.offsetWidth; // restart the animation
       stage.classList.add('pop');
     }
     play(fresh ? 'open' : 'switch');
     render();
   });
 
-  // Mouse dilepas: segmen terpilih tetap menyala selama roda memudar
+  // Mouse released: the picked segment stays lit while the wheel fades
   window.shiftwheel.onClose(() => stage.classList.add('closing'));
 </script>
 </body>

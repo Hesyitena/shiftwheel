@@ -1,5 +1,5 @@
-// node --check untuk semua JS + script inline overlay.html/hud.html, dan cek hash CSP.
-// Pakai `node test/check.js --fix` untuk menulis ulang hash CSP setelah mengedit overlay.html atau hud.html.
+// node --check for every JS file + the inline scripts in overlay.html/hud.html, and verify the CSP hashes.
+// Run `node test/check.js --fix` to rewrite the CSP hashes after editing overlay.html or hud.html.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -7,12 +7,12 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
-const jsFiles = ['main.js', 'preload.js', 'converter.js', 'tools.js', 'scripts/make-ico.js', 'scripts/dev.js', 'scripts/pasang.js', 'test/converter.test.js', 'test/check.js'];
+const jsFiles = ['main.js', 'preload.js', 'converter.js', 'tools.js', 'scripts/make-ico.js', 'scripts/dev.js', 'scripts/install-local.js', 'test/converter.test.js', 'test/check.js'];
 let ok = true;
 
 function nodeCheck(file, label) {
   try { execFileSync(process.execPath, ['--check', file], { stdio: 'pipe' }); console.log(`OK    node --check ${label}`); }
-  catch (e) { ok = false; console.log(`GAGAL node --check ${label}\n${e.stderr}`); }
+  catch (e) { ok = false; console.log(`FAIL  node --check ${label}\n${e.stderr}`); }
 }
 
 for (const f of jsFiles) nodeCheck(path.join(root, f), f);
@@ -22,7 +22,7 @@ const cspRe = /(http-equiv="Content-Security-Policy" content=")([^"]*)(")/;
 
 for (const name of ['overlay.html', 'hud.html']) {
   const htmlPath = path.join(root, name);
-  // Browser menormalkan CRLF jadi LF sebelum menghitung hash CSP, jadi kita juga
+  // Browsers normalize CRLF to LF before hashing for CSP, so we do too
   const html = fs.readFileSync(htmlPath, 'utf8').replace(/\r\n?/g, '\n');
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   const style = html.match(/<style>([\s\S]*?)<\/style>/)[1];
@@ -33,13 +33,13 @@ for (const name of ['overlay.html', 'hud.html']) {
 
   const csp = `default-src 'none'; script-src '${hash(script)}'; style-src '${hash(style)}'`;
   if (html.match(cspRe)[2] === csp) {
-    console.log(`OK    hash CSP ${name} cocok`);
+    console.log(`OK    CSP hashes in ${name} match`);
   } else if (process.argv.includes('--fix')) {
     fs.writeFileSync(htmlPath, html.replace(cspRe, `$1${csp}$3`));
-    console.log(`FIX   hash CSP ${name} diperbarui`);
+    console.log(`FIX   CSP hashes in ${name} updated`);
   } else {
     ok = false;
-    console.log(`GAGAL hash CSP ${name} tidak cocok, jalankan: node test/check.js --fix`);
+    console.log(`FAIL  CSP hashes in ${name} don't match, run: node test/check.js --fix`);
   }
 }
 

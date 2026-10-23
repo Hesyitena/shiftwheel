@@ -1,4 +1,4 @@
-// Shiftwheel: proses utama (tray, hook global, overlay radial, antrean konversi)
+// Shiftwheel: main process (tray, global hook, radial overlay, conversion queue)
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
@@ -7,19 +7,19 @@ const { uIOhook, UiohookKey } = require('uiohook-napi');
 const { convert, uniquePath, CATEGORIES, FALLBACK_TARGETS } = require('./converter');
 const { TOOLS, toolTasks } = require('./tools');
 
-const APP_ID = 'com.local.shiftwheel'; // harus sama dengan build.appId di package.json
+const APP_ID = 'com.local.shiftwheel'; // must match build.appId in package.json
 const OVERLAY_W = 360;
 const OVERLAY_H = 380;
 const HUD_W = 340;
 const HUD_H = 92;
-const HUD_DELAY = 600; // ms sebelum HUD progres muncul
-const WHEEL_CENTER = 180; // pusat roda di dalam jendela overlay
-const DRAG_THRESHOLD = 16; // DIP (~20 px fisik di skala 125%)
-const HIDE_DELAY = 400; // beri waktu event drop sampai sebelum overlay hilang
-const LINGER_MS = 8000; // mode --convert: tunggu sebentar supaya notifikasi masih bisa diklik
+const HUD_DELAY = 600; // ms before the progress HUD appears
+const WHEEL_CENTER = 180; // wheel center inside the overlay window
+const DRAG_THRESHOLD = 16; // DIP (~20 physical px at 125% scaling)
+const HIDE_DELAY = 400; // give the drop event time to arrive before the overlay hides
+const LINGER_MS = 8000; // --convert mode: wait a little so the notification can still be clicked
 const LOGIN_ARGS = ['--hidden'];
 
-// Ketuk tombol saat drag untuk membuka roda; ketuk tombol lain untuk ganti roda
+// Tap a key while dragging to open a wheel; tap another key to switch wheels
 const TRIGGER = {
   [UiohookKey.Shift]: 'convert',
   [UiohookKey.ShiftRight]: 'convert',
@@ -29,23 +29,23 @@ const TRIGGER = {
   [UiohookKey.AltRight]: 'actions',
 };
 
-// Hemat sumber daya: roda sederhana cukup dirender CPU (proses GPU ~80 MB -> ~15 MB, transparansi
-// tetap jalan), dan network service digabung ke proses utama karena Shiftwheel tidak memakai jaringan.
+// Save resources: a simple wheel renders fine on the CPU (GPU process ~80 MB -> ~15 MB, transparency
+// still works), and the network service runs in the main process since Shiftwheel never uses the network.
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch('enable-features', 'NetworkServiceInProcess2');
 
-// Saat dev (npm start) belum ada shortcut Start Menu dengan AUMID ini, jadi toast
-// diarahkan ke electron.exe supaya tetap muncul. Versi terinstal memakai APP_ID.
+// In dev (npm start) there's no Start Menu shortcut with this AUMID yet, so toasts are
+// attributed to electron.exe so they still show. The installed app uses APP_ID.
 app.setAppUserModelId(app.isPackaged ? APP_ID : process.execPath);
 
 const hidden = process.argv.includes('--hidden');
 let convertOnly = parseConvert(process.argv) !== null;
 let enabled = true;
-let soundOn = true; // dari settings.json, bisa diubah di menu tray
+let soundOn = true; // from settings.json, toggled from the tray menu
 let tray = null;
 let overlay = null;
 
-// ---------- Argumen --convert <format> <path> ----------
+// ---------- --convert <format> <path> argument ----------
 
 function parseConvert(argv) {
   const i = argv.indexOf('--convert');
@@ -58,7 +58,7 @@ function handleArgv(argv) {
   return job !== null;
 }
 
-// ---------- Pengaturan (userData/settings.json) ----------
+// ---------- Settings (userData/settings.json) ----------
 
 const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 
@@ -75,18 +75,18 @@ function saveSettings(settings) {
 
 function isAutostart() {
   const s = app.getLoginItemSettings({ args: LOGIN_ARGS });
-  // executableWillLaunchAtLogin ikut memperhitungkan "Disabled" di Task Manager
+  // executableWillLaunchAtLogin also respects "Disabled" in Task Manager
   return s.executableWillLaunchAtLogin ?? s.openAtLogin;
 }
 
 function setAutostart(on) {
-  if (!app.isPackaged) return; // jangan daftarkan electron.exe ke startup saat dev
+  if (!app.isPackaged) return; // never register electron.exe at startup during dev
   app.setLoginItemSettings({ openAtLogin: on, name: APP_ID, args: LOGIN_ARGS });
 }
 
-// ---------- Notifikasi ----------
+// ---------- Notifications ----------
 
-const liveNotes = new Set(); // simpan referensi supaya event klik tidak hilang karena GC
+const liveNotes = new Set(); // keep references so click events aren't lost to GC
 
 function notify(title, body, onClick) {
   if (!Notification.isSupported()) return;
@@ -97,7 +97,7 @@ function notify(title, body, onClick) {
   n.show();
 }
 
-// ---------- Antrean (sequential) untuk konversi dan tools ----------
+// ---------- Queue (sequential) for conversions and tools ----------
 
 let queue = Promise.resolve();
 let pending = 0;
@@ -109,21 +109,21 @@ function newBatch() {
 }
 
 function updateProgress() {
-  if (tray) tray.setToolTip(pending ? `Shiftwheel: memproses ${pending} file...` : 'Shiftwheel');
+  if (tray) tray.setToolTip(pending ? `Shiftwheel: processing ${pending} ${pending === 1 ? 'file' : 'files'}...` : 'Shiftwheel');
 }
 
-// task: { name, label, chip, run: (opts) => Promise<path hasil> }
+// task: { name, label, chip, run: (opts) => Promise<output path> }
 function enqueueTasks(tasks) {
   clearTimeout(quitTimer);
   for (const task of tasks) {
     pending++;
     batch.total++;
     batch.started = batch.started || Date.now();
-    batch.label = batch.label === null || batch.label === task.label ? task.label : 'Selesai diproses';
+    batch.label = batch.label === null || batch.label === task.label ? task.label : 'Done';
     queue = queue.then(async () => {
       updateProgress();
       const info = { name: task.name, label: task.label, chip: task.chip, index: batch.done + 1, total: batch.total, percent: null };
-      // HUD baru muncul kalau tugas berjalan agak lama, supaya konversi cepat tidak berkedip
+      // The HUD only appears when a task takes a while, so quick conversions don't flash it
       if (hudVisible) hudUpdate(info);
       else hudTimer = setTimeout(() => hudUpdate(info), HUD_DELAY);
       const onProgress = (p) => { info.percent = p; if (hudVisible) hudUpdate(info); };
@@ -147,34 +147,36 @@ function enqueueTasks(tasks) {
 }
 
 function enqueue(files, fmt) {
-  const label = `Konversi ke ${fmt.toUpperCase()}`;
+  const label = `Convert to ${fmt.toUpperCase()}`;
   enqueueTasks(files.map((f) => ({
     name: path.basename(String(f || '')), label, chip: fmt.toUpperCase(), run: (opts) => convert(f, fmt, opts),
   })));
 }
 
+const files = (n) => `${n} ${n === 1 ? 'file' : 'files'}`;
+
 function finishBatch() {
   const { ok, fail, skip, total, lastOut, note, label, started } = batch;
   batch = newBatch();
   const open = lastOut ? () => shell.showItemInFolder(lastOut) : null;
-  // Chime selesai hanya untuk proses lama; yang instan cukup bunyi "pilih" saat drop
+  // The "done" chime only plays for slow jobs; instant ones already got the "select" sound on drop
   if (fail) playSound('error');
   else if (ok && Date.now() - started > 1500) playSound('done');
   if (!fail && !skip) {
-    notify(ok === 1 ? `${path.basename(lastOut)} siap` : `${ok} file selesai`, `${label}. Klik untuk membuka foldernya.`, open);
+    notify(ok === 1 ? `${path.basename(lastOut)} is ready` : `${files(ok)} done`, `${label}. Click to open the folder.`, open);
   } else if (!ok && !fail) {
-    notify(total === 1 ? 'Dilewati' : `${total} file dilewati`, note);
+    notify(total === 1 ? 'Skipped' : `${files(total)} skipped`, note);
   } else if (!ok) {
-    notify(total === 1 ? 'Gagal diproses' : `${total} file gagal diproses`, note);
+    notify(total === 1 ? "Couldn't process the file" : `${files(total)} failed`, note);
   } else {
-    notify(`${ok} dari ${total} file selesai`, `${fail + skip} tidak diproses. ${note}`, open);
+    notify(`${ok} of ${files(total)} done`, `${fail + skip} not processed. ${note}`, open);
   }
 
-  // Dipanggil dari menu klik kanan tanpa instance lain: keluar setelah antrean kosong
+  // Started from the Explorer context menu with no other instance: quit once the queue is empty
   if (convertOnly) quitTimer = setTimeout(() => { if (pending === 0) app.quit(); }, LINGER_MS);
 }
 
-// ---------- HUD progres (pojok kanan bawah) ----------
+// ---------- Progress HUD (bottom-right corner) ----------
 
 let hud = null;
 let hudVisible = false;
@@ -204,7 +206,7 @@ function floatingWindow(width, height) {
       nodeIntegration: false,
       backgroundThrottling: false,
       spellcheck: false,
-      autoplayPolicy: 'no-user-gesture-required', // suara overlay tanpa klik dulu
+      autoplayPolicy: 'no-user-gesture-required', // overlay sounds without a click first
     },
   });
   win.setAlwaysOnTop(true, 'screen-saver');
@@ -225,7 +227,7 @@ function hudUpdate(info) {
     hud.showInactive();
     hudVisible = true;
   } else if (Date.now() - hudLastSend < 100 && info.percent !== 1) {
-    return; // batasi update progres ~10x per detik
+    return; // throttle progress updates to ~10 per second
   }
   hudLastSend = Date.now();
   if (!hud.webContents.isLoading()) hud.webContents.send('hud:update', info);
@@ -236,7 +238,7 @@ function hudHide() {
   if (!hudVisible) return;
   hudVisible = false;
   hud.webContents.send('hud:hide');
-  // Hancurkan setelah animasi: renderer HUD tidak perlu menganggur di memori (dibuat lagi saat dibutuhkan)
+  // Destroy after the fade: the HUD renderer shouldn't sit idle in memory (it's recreated when needed)
   setTimeout(() => {
     if (hudVisible || !hud) return;
     hud.destroy();
@@ -244,23 +246,23 @@ function hudHide() {
   }, 250);
 }
 
-// ---------- Aksi file (roda Alt) ----------
+// ---------- File actions (Alt wheel) ----------
 
-const count = (paths) => (paths.length === 1 ? `"${path.basename(paths[0])}"` : `${paths.length} item`);
+const count = (paths) => (paths.length === 1 ? `"${path.basename(paths[0])}"` : `${paths.length} items`);
 const psQuote = (s) => `'${s.replace(/'/g, "''")}'`;
 
-// Electron tidak bisa menaruh file (CF_HDROP) ke clipboard; PowerShell 5.1 bisa
+// Electron can't put files (CF_HDROP) on the clipboard; PowerShell 5.1 can
 function copyFilesToClipboard(paths) {
   const script = `Set-Clipboard -LiteralPath ${paths.map(psQuote).join(',')}`;
   const args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
   return new Promise((resolve, reject) => {
-    execFile('powershell.exe', args, { windowsHide: true }, (err) => (err ? reject(new Error('Gagal menyalin file ke clipboard.')) : resolve()));
+    execFile('powershell.exe', args, { windowsHide: true }, (err) => (err ? reject(new Error("Couldn't copy the files to the clipboard.")) : resolve()));
   });
 }
 
 async function transfer(paths, move) {
   const { canceled, filePaths } = await dialog.showOpenDialog({
-    title: move ? 'Pindahkan ke folder' : 'Salin ke folder',
+    title: move ? 'Move to folder' : 'Copy to folder',
     properties: ['openDirectory', 'createDirectory'],
   });
   if (canceled || !filePaths[0]) return null;
@@ -276,7 +278,7 @@ async function transfer(paths, move) {
         fs.renameSync(src, dest);
       } catch (err) {
         if (err.code !== 'EXDEV') throw err;
-        fs.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false }); // beda drive: salin lalu hapus
+        fs.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false }); // different drive: copy, then delete
         fs.rmSync(src, { recursive: true });
       }
     } else {
@@ -284,24 +286,24 @@ async function transfer(paths, move) {
     }
     last = dest;
   }
-  return { msg: `${count(paths)} ${move ? 'dipindah' : 'disalin'} ke ${dir}`, reveal: last };
+  return { msg: `${count(paths)} ${move ? 'moved' : 'copied'} to ${dir}`, reveal: last };
 }
 
 function openTerminal(paths) {
   const p = paths[0];
   const dir = fs.statSync(p).isDirectory() ? p : path.dirname(p);
   const term = spawn('wt.exe', ['-d', dir], { detached: true, stdio: 'ignore' });
-  term.on('error', () => spawn('cmd.exe', ['/K'], { cwd: dir, detached: true, stdio: 'ignore' }).unref()); // tanpa Windows Terminal
+  term.on('error', () => spawn('cmd.exe', ['/K'], { cwd: dir, detached: true, stdio: 'ignore' }).unref()); // no Windows Terminal
   term.unref();
 }
 
 const ACTIONS = [
-  { id: 'copy-path', icon: 'link', label: 'Salin path', caption: 'Salin path lengkap sebagai teks', run: (p) => { clipboard.writeText(p.join('\r\n')); return { msg: `Path ${count(p)} disalin` }; } },
-  { id: 'copy', icon: 'copy', label: 'Salin', caption: 'Salin ke clipboard, siap di-paste', run: async (p) => { await copyFilesToClipboard(p); return { msg: `${count(p)} siap di-paste` }; } },
-  { id: 'copy-to', icon: 'copy-to', label: 'Salin ke', caption: 'Salin ke folder lain', run: (p) => transfer(p, false) },
-  { id: 'move-to', icon: 'move-to', label: 'Pindah ke', caption: 'Pindahkan ke folder lain', run: (p) => transfer(p, true) },
-  { id: 'terminal', icon: 'terminal', label: 'Terminal', caption: 'Buka foldernya di Terminal', run: openTerminal },
-  { id: 'reveal', icon: 'folder', label: 'Explorer', caption: 'Tampilkan di Explorer', run: (p) => shell.showItemInFolder(p[0]) },
+  { id: 'copy-path', icon: 'link', label: 'Copy path', caption: 'Copy the full path as text', run: (p) => { clipboard.writeText(p.join('\r\n')); return { msg: `Copied the path of ${count(p)}` }; } },
+  { id: 'copy', icon: 'copy', label: 'Copy', caption: 'Copy to the clipboard, ready to paste', run: async (p) => { await copyFilesToClipboard(p); return { msg: `${count(p)} ready to paste` }; } },
+  { id: 'copy-to', icon: 'copy-to', label: 'Copy to', caption: 'Copy to another folder', run: (p) => transfer(p, false) },
+  { id: 'move-to', icon: 'move-to', label: 'Move to', caption: 'Move to another folder', run: (p) => transfer(p, true) },
+  { id: 'terminal', icon: 'terminal', label: 'Terminal', caption: 'Open the folder in Terminal', run: openTerminal },
+  { id: 'reveal', icon: 'folder', label: 'Explorer', caption: 'Show in Explorer', run: (p) => shell.showItemInFolder(p[0]) },
 ];
 
 async function runAction(id, paths) {
@@ -309,22 +311,22 @@ async function runAction(id, paths) {
   if (!action) return;
   try {
     const existing = paths.filter((p) => fs.existsSync(p));
-    if (!existing.length) throw new Error('File tidak ditemukan.');
+    if (!existing.length) throw new Error('File not found.');
     const result = await action.run(existing);
-    if (result) notify(result.msg, result.reveal ? 'Klik untuk membuka foldernya.' : '', result.reveal ? () => shell.showItemInFolder(result.reveal) : null);
+    if (result) notify(result.msg, result.reveal ? 'Click to open the folder.' : '', result.reveal ? () => shell.showItemInFolder(result.reveal) : null);
   } catch (err) {
     playSound('error');
-    notify(`${action.label} gagal`, err.message);
+    notify(`${action.label} failed`, err.message);
   }
 }
 
-// ---------- Isi roda (dikirim ke overlay) ----------
+// ---------- Wheel contents (sent to the overlay) ----------
 
 function wheelConfig() {
-  const conv = (t) => ({ id: `convert:${t}`, label: t.toUpperCase(), caption: `Konversi ke ${t.toUpperCase()}` });
+  const conv = (t) => ({ id: `convert:${t}`, label: t.toUpperCase(), caption: `Convert to ${t.toUpperCase()}` });
   const convert = { fallback: FALLBACK_TARGETS.map(conv) };
   for (const [cat, c] of Object.entries(CATEGORIES)) convert[cat] = c.targets.map(conv);
-  convert.image.find((i) => i.id === 'convert:txt').caption = 'Ambil teks dari gambar (OCR)';
+  convert.image.find((i) => i.id === 'convert:txt').caption = 'Extract text from the image (OCR)';
   const tools = {};
   for (const [cat, list] of Object.entries(TOOLS)) {
     tools[cat] = list.map((t) => ({ id: `tool:${cat}.${t.id}`, label: t.label, caption: t.caption, icon: t.icon, multi: Boolean(t.multi) }));
@@ -337,7 +339,7 @@ ipcMain.on('overlay:drop', (e, msg) => {
   if (!overlay || e.sender !== overlay.webContents) return;
   const id = msg && typeof msg.id === 'string' ? msg.id : '';
   const paths = Array.isArray(msg && msg.paths) ? msg.paths.filter((p) => typeof p === 'string' && p) : [];
-  if (!id || paths.length === 0) return; // drop di tengah / luar segmen = batal
+  if (!id || paths.length === 0) return; // dropped in the center / outside a segment = cancel
 
   const sep = id.indexOf(':');
   const kind = id.slice(0, sep);
@@ -345,7 +347,7 @@ ipcMain.on('overlay:drop', (e, msg) => {
   if (kind === 'convert') enqueue(paths, value);
   else if (kind === 'action') runAction(value, paths);
   else if (kind === 'tool') {
-    try { enqueueTasks(toolTasks(value, paths)); } catch (err) { notify('Tool tidak bisa dipakai', err.message); }
+    try { enqueueTasks(toolTasks(value, paths)); } catch (err) { notify("Can't use this tool", err.message); }
   }
 });
 
@@ -361,7 +363,7 @@ function createOverlay() {
     overlay.webContents.send('overlay:config', wheelConfig());
     overlay.webContents.send('overlay:settings', { sound: soundOn });
   });
-  overlay.on('session-end', stopHook); // logoff / shutdown Windows
+  overlay.on('session-end', stopHook); // Windows logoff / shutdown
 }
 
 function placeOverlay(p) {
@@ -385,11 +387,11 @@ function scheduleHide() {
   if (!shown) return;
   shown = false;
   clearTimeout(hideTimer);
-  overlay.webContents.send('overlay:close'); // animasi pudar
+  overlay.webContents.send('overlay:close'); // fade-out animation
   hideTimer = setTimeout(() => overlay && overlay.hide(), HIDE_DELAY);
 }
 
-// Suara dimainkan di jendela overlay (main process tidak punya audio)
+// Sounds play in the overlay window (the main process has no audio)
 function playSound(name) {
   if (soundOn && overlay) overlay.webContents.send('overlay:sound', name);
 }
@@ -400,14 +402,14 @@ function hideNow() {
   if (overlay) overlay.hide();
 }
 
-// ---------- Hook global (uiohook) ----------
-// Heuristik "file sedang di-drag": tombol kiri ditahan dan kursor sudah bergeser > DRAG_THRESHOLD
-// saat Shift/Ctrl/Alt diketuk. Roda tetap terbuka sampai mouse dilepas (atau Esc).
-// Sengaja tanpa listener mousemove: jarak dihitung sekali saat tombol diketuk, jadi gerakan
-// mouse sehari-hari hampir tidak memakan CPU.
+// ---------- Global hook (uiohook) ----------
+// "A file is being dragged" heuristic: left button held and the cursor has moved > DRAG_THRESHOLD
+// when Shift/Ctrl/Alt is tapped. The wheel stays open until the mouse is released (or Esc).
+// Deliberately no mousemove listener: the distance is checked once when a key is tapped, so
+// everyday mouse movement costs almost no CPU.
 
-const drag = { down: false, x0: 0, y0: 0 }; // posisi klik dalam DIP
-const held = new Set(); // abaikan auto-repeat saat tombol ditahan
+const drag = { down: false, x0: 0, y0: 0 }; // click position in DIP
+const held = new Set(); // ignore auto-repeat while a key is held
 let hookRunning = false;
 
 uIOhook.on('keydown', (e) => {
@@ -419,7 +421,7 @@ uIOhook.on('keydown', (e) => {
   if (!mode || held.has(e.keycode)) return;
   held.add(e.keycode);
   if (!enabled || !drag.down) return;
-  if (shown) return openWheel(mode); // ganti roda
+  if (shown) return openWheel(mode); // switch wheels
   const cursor = screen.getCursorScreenPoint();
   if (Math.hypot(cursor.x - drag.x0, cursor.y - drag.y0) > DRAG_THRESHOLD) openWheel(mode, cursor);
 });
@@ -428,7 +430,7 @@ uIOhook.on('keyup', (e) => held.delete(e.keycode));
 
 uIOhook.on('mousedown', (e) => {
   if (e.button !== 1) return;
-  // uiohook memberi piksel fisik; ubah ke DIP supaya benar di scaling selain 100%
+  // uiohook reports physical pixels; convert to DIP so it's right at scaling other than 100%
   const p = screen.screenToDipPoint({ x: e.x, y: e.y });
   Object.assign(drag, { down: true, x0: p.x, y0: p.y });
 });
@@ -445,13 +447,13 @@ function startHook() {
     uIOhook.start();
     hookRunning = true;
   } catch (err) {
-    notify('Shiftwheel tidak bisa membaca keyboard/mouse', err.message);
+    notify("Shiftwheel can't read the keyboard/mouse", err.message);
   }
 }
 
 function stopHook() {
   if (!hookRunning) return;
-  try { uIOhook.stop(); } catch { /* sudah berhenti */ }
+  try { uIOhook.stop(); } catch { /* already stopped */ }
   hookRunning = false;
   held.clear();
   drag.down = false;
@@ -463,7 +465,7 @@ function stopHook() {
 function buildMenu() {
   return Menu.buildFromTemplate([
     {
-      label: 'Aktif',
+      label: 'Enabled',
       type: 'checkbox',
       checked: enabled,
       click: (item) => {
@@ -472,7 +474,7 @@ function buildMenu() {
       },
     },
     {
-      label: 'Suara',
+      label: 'Sounds',
       type: 'checkbox',
       checked: soundOn,
       click: (item) => {
@@ -482,20 +484,20 @@ function buildMenu() {
       },
     },
     {
-      label: app.isPackaged ? 'Jalankan saat Windows menyala' : 'Jalankan saat Windows menyala (hanya versi terinstal)',
+      label: app.isPackaged ? 'Start with Windows' : 'Start with Windows (installed version only)',
       type: 'checkbox',
       checked: app.isPackaged && isAutostart(),
-      enabled: app.isPackaged, // nonaktif saat dev
+      enabled: app.isPackaged, // disabled in dev
       click: (item) => setAutostart(item.checked),
     },
     { type: 'separator' },
     { label: `Shiftwheel ${app.getVersion()}${app.isPackaged ? '' : ' (dev)'}`, enabled: false },
-    { label: 'Keluar', click: () => app.quit() },
+    { label: 'Quit', click: () => app.quit() },
   ]);
 }
 
 function trayImage() {
-  // tray-16/24/32.png digambar khusus per ukuran oleh scripts/make-ico.js (lebih tajam dari hasil resize)
+  // tray-16/24/32.png are drawn per size by scripts/make-ico.js (sharper than a resize)
   const img = nativeImage.createEmpty();
   for (const [scaleFactor, size] of [[1, 16], [1.5, 24], [2, 32]]) {
     img.addRepresentation({ scaleFactor, buffer: fs.readFileSync(path.join(__dirname, 'assets', `tray-${size}.png`)) });
@@ -506,13 +508,13 @@ function trayImage() {
 function createTray() {
   tray = new Tray(trayImage());
   updateProgress();
-  // Menu dibangun ulang tiap dibuka supaya status autostart selalu sesuai registry
+  // The menu is rebuilt on every open so the autostart state always matches the registry
   const open = () => tray.popUpContextMenu(buildMenu());
   tray.on('click', open);
   tray.on('right-click', open);
 }
 
-// ---------- Mode latar belakang ----------
+// ---------- Background mode ----------
 
 function startBackground() {
   convertOnly = false;
@@ -531,9 +533,9 @@ function startBackground() {
   startHook();
 
   powerMonitor.on('suspend', stopHook);
-  powerMonitor.on('resume', () => { stopHook(); startHook(); }); // hook bisa mati setelah sleep
+  powerMonitor.on('resume', () => { stopHook(); startHook(); }); // the hook can die after sleep
 
-  if (firstRun && !hidden) notify('Shiftwheel siap', 'Mulai drag file, lalu ketuk Shift untuk konversi, Ctrl untuk tools, atau Alt untuk aksi.');
+  if (firstRun && !hidden) notify('Shiftwheel is ready', 'Start dragging a file, then tap Shift to convert, Ctrl for tools, or Alt for actions.');
 }
 
 // ---------- Single instance ----------
@@ -541,12 +543,12 @@ function startBackground() {
 if (!app.requestSingleInstanceLock({ argv: process.argv })) {
   app.quit();
 } else {
-  // Pakai additionalData: argv bawaan event ini bisa berubah urutan di Windows
+  // Use additionalData: this event's own argv can be reordered on Windows
   app.on('second-instance', (_e, _argv, _cwd, data) => {
     const argv = (data && data.argv) || _argv;
     if (handleArgv(argv)) return;
-    if (convertOnly) return startBackground(); // app dibuka normal saat instance --convert masih jalan
-    if (!argv.includes('--hidden')) notify('Shiftwheel sudah berjalan', 'Ikonnya ada di tray. Mulai drag file, lalu ketuk Shift.');
+    if (convertOnly) return startBackground(); // app opened normally while a --convert instance is still running
+    if (!argv.includes('--hidden')) notify('Shiftwheel is already running', "It's in the tray. Start dragging a file, then tap Shift.");
   });
 
   app.whenReady().then(() => {

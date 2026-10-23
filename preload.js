@@ -1,4 +1,4 @@
-// Jembatan overlay/HUD <-> main. Drop file ditangkap di sini supaya path asli bisa diambil.
+// Bridge between the overlay/HUD and main. File drops are caught here so the real paths can be read.
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const on = (channel) => (cb) => ipcRenderer.on(channel, (_e, payload) => cb(payload));
@@ -13,8 +13,8 @@ contextBridge.exposeInMainWorld('shiftwheel', {
   onHudHide: on('hud:hide'),
 });
 
-// Wajib paksa 'copy': Shift saat drag berarti "move" di Explorer,
-// dan kalau target membalas move, Explorer bisa menghapus file asli.
+// Always force 'copy': Shift while dragging means "move" in Explorer,
+// and if the drop target answers with move, Explorer may delete the original file.
 window.addEventListener('dragover', (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
@@ -23,7 +23,7 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
-  // Overlay menulis segmen yang sedang disorot ke body.dataset.pick (kosong = batal)
+  // The overlay writes the highlighted segment to body.dataset.pick (empty = cancel)
   const id = document.body.dataset.pick || null;
   const paths = [...e.dataTransfer.files].map((f) => webUtils.getPathForFile(f)).filter(Boolean);
   ipcRenderer.send('overlay:drop', { id, paths });

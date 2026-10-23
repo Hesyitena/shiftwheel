@@ -1,141 +1,143 @@
 # Shiftwheel
 
-Konversi file ala [Tangerine](https://tangerineformac.com/) (macOS) untuk Windows 11. Mulai drag file dari Explorer, **ketuk** sebuah tombol, lalu roda muncul di sekitar kursor dan tetap terbuka sampai file di-drop:
+A [Tangerine](https://tangerineformac.com/)-style file converter for Windows 11. Start dragging a file in Explorer, **tap** a key, and a wheel opens around the cursor. It stays open until you drop the file:
 
-| Ketuk saat drag | Roda | Contoh isi |
+| Tap while dragging | Wheel | Examples |
 |---|---|---|
-| **Shift** | Konversi | gambar → JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF |
-| **Ctrl** | Tools | kompres, 50%, putar, hitam putih, hapus metadata, gabung jadi PDF |
-| **Alt** | Aksi file | salin path, salin, salin ke…, pindah ke…, terminal, tampilkan di Explorer |
+| **Shift** | Convert | image → JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF, TXT |
+| **Ctrl** | Tools | compress, rotate, trim edges, merge into a PDF, denoise audio |
+| **Alt** | File actions | copy path, copy, copy to…, move to…, terminal, show in Explorer |
 
-Isi roda mengikuti tipe file yang di-drag. Bagian tengah roda menunjukkan apa yang sedang dibawa (misalnya "2 gambar"), lalu nama dan keterangan opsi yang sedang disorot. Bar kecil di bawah roda menunjukkan roda yang aktif; ketuk tombol lain untuk berganti roda. Lepas file di tengah ("Batal") atau di luar roda, atau tekan **Esc**, untuk batal. Hasil disimpan di folder yang sama dengan file asal.
+The wheel's contents depend on the type of file you're dragging. The center of the wheel shows what you're carrying (for example "2 images"), then the name and description of the highlighted option. The small bar under the wheel shows the active wheel; tap another key to switch. Drop on the center ("Cancel") or outside the wheel, or press **Esc**, to cancel. Results are saved next to the original file.
 
-Kalau prosesnya lebih dari setengah detik, kartu progres kecil muncul di pojok kanan bawah (audio/video dengan persentase). Setelah selesai muncul notifikasi, misalnya "laporan.pdf siap"; klik untuk membuka foldernya.
+If a job takes more than half a second, a small progress card appears in the bottom-right corner (with a percentage for audio/video). When it's done you get a notification such as "report.pdf is ready"; click it to open the folder.
 
-Shiftwheel berjalan di system tray tanpa jendela. Menu tray berisi **Aktif**, **Suara**, **Jalankan saat Windows menyala**, dan **Keluar**.
+Shiftwheel lives in the system tray with no window. The tray menu has **Enabled**, **Sounds**, **Start with Windows**, and **Quit**.
 
-**Suara.** Efek suara pendek saat roda muncul, saat pindah segmen, saat ganti roda (Shift/Ctrl/Alt), saat file di-drop atau dibatalkan, dan saat proses gagal. Chime "selesai" hanya berbunyi untuk proses yang lebih dari 1,5 detik, supaya konversi instan tidak ramai. Semua suara disintesis langsung (WebAudio), tanpa file audio. Matikan lewat **Suara** di menu tray; pilihannya tersimpan.
+**Sounds.** Short sound effects when the wheel opens, when you move between segments, when you switch wheels (Shift/Ctrl/Alt), when a file is dropped or cancelled, and when a job fails. The "done" chime only plays for jobs that take more than 1.5 seconds, so instant conversions stay quiet. All sounds are synthesized on the fly (WebAudio), no audio files. Turn them off with **Sounds** in the tray menu; the choice is saved.
 
-## Kebutuhan
+## Requirements
 
-Semua konversi berjalan lokal di PC, tidak ada file yang di-upload. Program bantu berikut dipakai sesuai kebutuhan (Shiftwheel mencarinya di folder instalasi umum, paket winget, dan PATH):
+Everything runs locally on your PC; no file is ever uploaded. These helper programs are used as needed (Shiftwheel looks for them in common install folders, winget packages, and PATH):
 
-| Program | Untuk | Install |
+| Program | Used for | Install |
 |---|---|---|
-| [LibreOffice](https://www.libreoffice.org/download/) | dokumen, spreadsheet, presentasi, PDF → DOCX/TXT | `winget install TheDocumentFoundation.LibreOffice` |
-| [ffmpeg](https://www.gyan.dev/ffmpeg/builds/) | audio, video, gambar BMP/HEIC | `winget install Gyan.FFmpeg` |
-| [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) | PDF → JPG/PNG, OCR PDF hasil scan | `winget install oschwartz10612.Poppler` |
-| OCR Windows | gambar → TXT, PDF hasil scan → TXT | bawaan Windows 10/11, aktif kalau ada bahasa dengan fitur OCR (bahasa Inggris sudah cukup untuk teks Indonesia) |
+| [LibreOffice](https://www.libreoffice.org/download/) | documents, spreadsheets, presentations, PDF → DOCX/TXT | `winget install TheDocumentFoundation.LibreOffice` |
+| [ffmpeg](https://www.gyan.dev/ffmpeg/builds/) | audio, video, BMP/HEIC images | `winget install Gyan.FFmpeg` |
+| [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) | PDF → JPG/PNG, OCR for scanned PDFs | `winget install oschwartz10612.Poppler` |
+| Windows OCR | image → TXT, scanned PDF → TXT | built into Windows 10/11; active when a language with the OCR feature is installed (English works for any Latin-script text) |
 
-Konversi gambar biasa dan semua tools gambar/PDF tidak butuh program tambahan. Kalau program bantu belum terpasang, notifikasi menyebutkan perintah install-nya.
+Plain image conversions and all image/PDF tools need nothing extra. If a helper program is missing, the notification tells you the command to install it.
 
-Untuk development: Node.js 20+.
+For development: Node.js 20+.
 
-## Instalasi untuk pemakaian harian
+## Installing for everyday use
 
 ```bash
 npm install
 npm run dist
 ```
 
-Installer ada di `dist/Shiftwheel Setup <versi>.exe`. Jalankan installer itu:
+The installer ends up in `dist/Shiftwheel Setup <version>.exe`. Run it:
 
-- Terinstal per-user di `%LOCALAPPDATA%\Programs\Shiftwheel`, tanpa hak admin.
-- Shortcut dibuat di Start Menu (tidak di desktop).
-- App langsung jalan setelah instalasi dan muncul notifikasi "Shiftwheel berjalan di tray".
-- Saat pertama jalan, autostart aktif otomatis (`--hidden`: langsung ke tray, tanpa notifikasi). Bisa dimatikan dari menu tray.
-- Klik kanan file di Explorer → **Show more options** → **Konversi dengan Shiftwheel** → PDF / DOCX / TXT / JPG.
+- Installs per user in `%LOCALAPPDATA%\Programs\Shiftwheel`, no admin rights needed.
+- Adds a Start Menu shortcut (no desktop shortcut).
+- Starts the app right away and shows a "Shiftwheel is ready" notification.
+- On first run, autostart is turned on (`--hidden`: straight to the tray, no notification). You can turn it off from the tray menu.
+- Right-click a file in Explorer → **Show more options** → **Convert with Shiftwheel** → PDF / DOCX / TXT / JPG.
 
-Uninstall lewat Settings → Apps. Uninstaller menutup Shiftwheel yang sedang jalan, lalu menghapus entri autostart dan menu klik kanan. Pengaturan di `%APPDATA%\Shiftwheel` tidak ikut dihapus.
+Uninstall from Settings → Apps. The uninstaller closes Shiftwheel if it's running, then removes the autostart entry and the context menu. Settings in `%APPDATA%\Shiftwheel` are kept.
 
-## Ringan di CPU dan RAM
+## Light on CPU and RAM
 
-Shiftwheel jalan terus di latar belakang, jadi dibuat sehemat mungkin:
+Shiftwheel runs in the background all the time, so it's built to be as cheap as possible:
 
-- **Tanpa GPU.** Roda cukup dirender CPU; proses GPU Chromium turun dari ~80 MB ke ~15 MB.
-- **Tanpa proses jaringan.** Network service digabung ke proses utama (Shiftwheel tidak pernah memakai internet).
-- **Library berat dimuat saat dibutuhkan.** sharp (libvips) dan pdf-lib baru dimuat saat konversi pertama.
-- **Jendela progres dibuat saat perlu** dan dihancurkan lagi setelah selesai.
-- **Audio mati saat diam.** Mesin suara ditutup 1,5 detik setelah bunyi terakhir dan dibuat lagi saat dibutuhkan (~25–55 ms; lebih cepat daripada membangunkan yang ditidurkan, yang di Windows bisa sampai ~440 ms).
-- **Hook tanpa `mousemove`.** Gerakan mouse sehari-hari tidak diproses; jarak drag dihitung sekali saat Shift/Ctrl/Alt diketuk.
-- LibreOffice, ffmpeg, dan OCR hanya jalan selama ada file yang diproses.
+- **No GPU.** The wheel renders fine on the CPU; Chromium's GPU process drops from ~80 MB to ~15 MB.
+- **No network process.** The network service runs inside the main process (Shiftwheel never uses the internet).
+- **Heavy libraries load on demand.** sharp (libvips) and pdf-lib only load on the first conversion.
+- **The progress window is created when needed** and destroyed again when the job is done.
+- **Audio turns off when idle.** The sound engine closes 1.5 seconds after the last sound and is recreated when needed (~25–55 ms; faster than waking a suspended one, which on Windows can take up to ~440 ms).
+- **A hook without `mousemove`.** Everyday mouse movement isn't processed; the drag distance is checked once when Shift/Ctrl/Alt is tapped.
+- LibreOffice, ffmpeg, and OCR only run while a file is being processed.
 
-## Development dan mencoba update
+Measured idle footprint of the installed app: ~75 MB of private RAM across 3 processes, ~0.4% of one CPU core.
 
-| Perintah | Kapan dipakai |
+## Development and trying changes
+
+| Command | When to use it |
 |---|---|
-| `npm run dev` | Mencoba perubahan langsung. Shiftwheel jalan dari source dan **restart sendiri setiap file app disimpan**. Versi terinstal ditutup dulu (keduanya tidak bisa jalan bersamaan); buka lagi dari Start Menu setelah selesai. Berhenti dengan Ctrl+C atau **Keluar** di menu tray. |
-| `npm run pasang` | Perubahan sudah oke dan mau dipakai harian. Build installer lalu memasangnya diam-diam di PC ini (~1 menit). Versi lama ditutup, versi baru langsung jalan di tray, pengaturan tetap. |
-| `npm test` | `node --check`, cek hash CSP, dan tes converter/tools. Tes yang butuh LibreOffice/ffmpeg/Poppler dilewati kalau programnya tidak ada. |
-| `npm run dist` | Hanya membuat installer di `dist/` (misalnya untuk dipasang di PC lain). |
+| `npm run dev` | Try changes right away. Shiftwheel runs from source and **restarts itself every time an app file is saved**. The installed version is closed first (they can't run side by side); reopen it from the Start Menu when you're done. Stop with Ctrl+C or **Quit** in the tray menu. |
+| `npm run install-local` | The changes are good and you want to use them every day. Builds the installer and installs it silently on this PC (~1 minute). The old version is closed, the new one starts in the tray, settings are kept. |
+| `npm test` | `node --check`, CSP hash check, and the converter/tools tests. Tests that need LibreOffice/ffmpeg/Poppler/OCR are skipped when the program isn't there. |
+| `npm run dist` | Only builds the installer in `dist/` (for example to install on another PC). |
 
-Alurnya: edit kode → coba dengan `npm run dev` → `npm test` → commit dan push → `npm run pasang`.
+The loop: edit code → try it with `npm run dev` → `npm test` → commit and push → `npm run install-local`.
 
-Kalau `npm run dist` gagal dengan `EBUSY ... app.asar`, berarti ada app Electron lain (editor atau Claude desktop yang sedang membuka folder ini) yang memegang `dist/win-unpacked/resources/app.asar`. Tutup app itu atau hapus `dist/win-unpacked`. `npm run pasang` tidak kena masalah ini karena build di folder sementara.
+If `npm run dist` fails with `EBUSY ... app.asar`, another Electron app (an editor, or Claude desktop with this folder open) is holding `dist/win-unpacked/resources/app.asar`. Close that app or delete `dist/win-unpacked`. `npm run install-local` doesn't hit this because it builds in a temp folder.
 
-Jalankan `npm run pasang` dari terminal Windows biasa (Windows Terminal, PowerShell, cmd), **bukan** dari terminal di dalam aplikasi Claude desktop. Proses yang dijalankan dari dalam Claude desktop ikut tervirtualisasi (MSIX): tulisan ke `%LOCALAPPDATA%`/`%APPDATA%` dialihkan ke folder privat Claude, jadi Shiftwheel akan terpasang di tempat yang tidak dilihat Windows.
+Run `npm run install-local` from a regular Windows terminal (Windows Terminal, PowerShell, cmd), **not** from a terminal inside the Claude desktop app. Processes started inside Claude desktop are virtualized (MSIX): writes to `%LOCALAPPDATA%`/`%APPDATA%` are redirected to Claude's private folder, so Shiftwheel would be installed somewhere Windows can't see.
 
-Setelah mengedit `<style>` atau `<script>` di `overlay.html` atau `hud.html`, perbarui hash CSP dengan `node test/check.js --fix` (kalau lupa, overlay tampil tanpa gaya dan `npm test` gagal).
+After editing the `<style>` or `<script>` in `overlay.html` or `hud.html`, update the CSP hashes with `node test/check.js --fix` (if you forget, the overlay renders unstyled and `npm test` fails).
 
-Kategori dan format tujuan diatur di satu tempat: `CATEGORIES` di `converter.js`. Tools ada di `TOOLS` di `tools.js`, aksi file di `ACTIONS` di `main.js`. Roda dibangun dari ketiganya.
+Categories and target formats live in one place: `CATEGORIES` in `converter.js`. Tools are in `TOOLS` in `tools.js`, file actions in `ACTIONS` in `main.js`. The wheels are built from those three.
 
-Ikon digambar dari kode di `scripts/make-ico.js`: tile hitam dengan roda putih yang satu segmennya menyala. Skrip itu membuat `assets/icon.svg`, `assets/icon.png`, ikon tray `assets/tray-16/24/32.png`, dan `build/icon.ico` (16–256 px). Ukuran ≤ 32 px memakai versi 4 segmen yang lebih tebal supaya tetap tajam. `npm run dist` menjalankannya otomatis.
+The icon is drawn in code by `scripts/make-ico.js`: a black tile with a white wheel that has one lit segment. The script writes `assets/icon.svg`, `assets/icon.png`, the tray icons `assets/tray-16/24/32.png`, and `build/icon.ico` (16–256 px). Sizes ≤ 32 px use a bolder 4-segment version so they stay crisp. `npm run dist` runs it automatically.
 
-## Roda konversi (Shift)
+## Convert wheel (Shift)
 
-| Tipe file | Sumber | Tujuan | Lewat |
+| File type | From | To | Using |
 |---|---|---|---|
-| Gambar | png, jpg, webp, gif, tiff, avif, bmp, heic, svg | JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF, TXT | sharp, pdf-lib, OCR Windows (BMP/HEIC lewat ffmpeg) |
+| Images | png, jpg, webp, gif, tiff, avif, bmp, heic, svg | JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF, TXT | sharp, pdf-lib, Windows OCR (BMP/HEIC through ffmpeg) |
 | PDF | pdf | DOCX, TXT, JPG, PNG | LibreOffice, pdftoppm |
-| Dokumen | doc, docx, odt, rtf, txt, html | PDF, DOCX, ODT, RTF, TXT, HTML | LibreOffice |
-| Spreadsheet | xls, xlsx, ods, csv | PDF, XLSX, ODS, CSV | LibreOffice |
-| Presentasi | ppt, pptx, odp | PDF, PPTX, ODP | LibreOffice |
+| Documents | doc, docx, odt, rtf, txt, html | PDF, DOCX, ODT, RTF, TXT, HTML | LibreOffice |
+| Spreadsheets | xls, xlsx, ods, csv | PDF, XLSX, ODS, CSV | LibreOffice |
+| Presentations | ppt, pptx, odp | PDF, PPTX, ODP | LibreOffice |
 | Audio | mp3, m4a, wav, flac, ogg, opus, aiff, wma, aac | MP3, M4A, WAV, FLAC, OGG, OPUS, AIFF | ffmpeg |
 | Video | mp4, mov, mkv, webm, avi, wmv, m4v | MP4, MOV, MKV, WEBM, GIF, MP3 | ffmpeg |
 
-- Gambar → JPG: orientasi mengikuti EXIF, transparansi diganti putih, kualitas 92. Animasi GIF ↔ WEBP dipertahankan.
-- Gambar → TXT: teks diambil dengan OCR bawaan Windows, offline. Gambar kecil diperbesar 2× dulu supaya tulisan kecil terbaca. Gambar tanpa tulisan ditolak, tidak membuat file kosong.
-- Gambar → PDF: satu halaman dengan lebar 595 pt (A4), tinggi mengikuti rasio gambar.
-- PDF → JPG/PNG: semua halaman pada 150 DPI. Satu halaman jadi `nama.jpg`; banyak halaman jadi `nama 1.jpg`, `nama 2.jpg`, dst.
-- PDF → TXT: LibreOffice meng-import PDF sebagai frame teks yang diabaikan ekspor TXT biasa, jadi Shiftwheel mengambil teks lewat FODT lalu mengurutkannya sesuai posisi di halaman. Teks biasa hasilnya rapi; tata letak kolom/tabel jadi baris berurutan kiri→kanan. PDF hasil scan atau foto (tanpa lapisan teks) otomatis dibaca dengan OCR Windows: tiap halaman dirender 200 DPI lalu dikenali, antarhalaman dipisah baris kosong.
-- PDF → DOCX: teks masuk ke text box per baris (perilaku import PDF LibreOffice), jadi bisa dibaca dan diedit tapi tata letaknya tidak mengalir seperti dokumen Word biasa.
-- Video → MP4/MOV/MKV: H.264 + AAC (CRF 20). WEBM: VP9 + Opus. GIF: 12 fps, lebar maks 480 px.
-- File yang sudah berformat tujuan dilewati ("Sudah berformat X").
-- Hasil tidak pernah menimpa file lain: `nama.pdf`, lalu `nama (1).pdf`, `nama (2).pdf`, dst.
+- Image → JPG: follows EXIF orientation, transparency becomes white, quality 92. GIF ↔ WEBP animation is kept.
+- Image → TXT: text is read with Windows' built-in OCR, offline. Small images are upscaled 2× first so small text reads. Images without writing are rejected instead of producing an empty file.
+- Image → PDF: one page 595 pt wide (A4), height following the image's aspect ratio.
+- PDF → JPG/PNG: every page at 150 DPI. A single page becomes `name.jpg`; several pages become `name 1.jpg`, `name 2.jpg`, and so on.
+- PDF → TXT: LibreOffice imports a PDF as text frames that a normal TXT export ignores, so Shiftwheel reads the text through FODT and sorts it by position on the page. Ordinary text comes out clean; column/table layouts become rows read left → right. Scanned or photographed PDFs (no text layer) are read with Windows OCR automatically: each page is rendered at 200 DPI and recognized, with a blank line between pages.
+- PDF → DOCX: text lands in one text box per line (that's how LibreOffice imports PDFs), so it's readable and editable but doesn't flow like a normal Word document.
+- Video → MP4/MOV/MKV: H.264 + AAC (CRF 20). WEBM: VP9 + Opus. GIF: 12 fps, max 480 px wide.
+- Files already in the target format are skipped ("Already a X file").
+- Results never overwrite another file: `name.pdf`, then `name (1).pdf`, `name (2).pdf`, and so on.
 
-## Roda tools (Ctrl)
+## Tools wheel (Ctrl)
 
-Hasil disimpan sebagai file baru, misalnya `foto (dikompres).jpg`. File asli tidak diubah.
+Results are saved as new files, for example `photo (compressed).jpg`. The original is never changed.
 
-| Tipe file | Tools |
+| File type | Tools |
 |---|---|
-| Gambar | **Kompres** (maks 2560 px, kualitas ~75; dilewati kalau hasilnya tidak lebih kecil), **50%**, **Putar** 90°, **Hitam putih**, **Metadata** (hapus EXIF/lokasi), **Cermin**, **Pangkas tepi** (buang pinggiran polos), **Persegi** 1:1 (crop pintar ke bagian paling menonjol), **Gabung PDF** (≥ 2 gambar jadi `Gabungan.pdf`) |
-| PDF | **Gabung** (≥ 2 PDF jadi `Gabungan.pdf`), **Pisah** per halaman (`nama hal 1.pdf`, …), **Putar** semua halaman 90°, **Metadata** (hapus judul/penulis/XMP), **Nomor hal.** ("1 / 5" di bawah tiap halaman), **Balik urutan** halaman |
-| Video | **Kompres** (maks 1080p, CRF 28), **720p**, **Bisukan**, **Putar** 90°, **Thumbnail** (JPG dari tengah video), **2× cepat** |
-| Audio | **Kompres** (MP3 128 kbps), **Normalisasi** (loudnorm −16 LUFS), **Mono**, **Kurangi bising** (afftdn), **Potong hening** di awal/akhir, **1,5× cepat** (nada tetap), **Fade** in/out |
-| Dokumen, spreadsheet, presentasi | **Gabung PDF** (≥ 2 file jadi satu `Gabungan.pdf`), **Per halaman / Per slide** (tiap halaman jadi PNG) |
+| Images | **Compress** (max 2560 px, quality ~75; skipped if the result isn't smaller), **50%**, **Rotate** 90°, **Grayscale**, **Metadata** (remove EXIF/location), **Mirror**, **Trim edges** (cut away plain borders), **Square** 1:1 (smart crop around the most salient part), **Merge PDF** (2+ images into `Merged.pdf`) |
+| PDF | **Merge** (2+ PDFs into `Merged.pdf`), **Split** into pages (`name page 1.pdf`, …), **Rotate** every page 90°, **Metadata** (remove title/author/XMP), **Page numbers** ("1 / 5" at the bottom of each page), **Reverse** page order |
+| Video | **Compress** (max 1080p, CRF 28), **720p**, **Mute**, **Rotate** 90°, **Thumbnail** (JPG from the middle of the video), **2× speed** |
+| Audio | **Compress** (128 kbps MP3), **Normalize** (loudnorm −16 LUFS), **Mono**, **Denoise** (afftdn), **Trim silence** at the start/end, **1.5× speed** (same pitch), **Fade** in/out |
+| Documents, spreadsheets, presentations | **Merge PDF** (2+ files into one `Merged.pdf`), **Pages / Slides** (every page as a PNG) |
 
-Tools dokumen/spreadsheet/presentasi memakai LibreOffice; "Per halaman" juga butuh Poppler.
+The document/spreadsheet/presentation tools use LibreOffice; "Pages" also needs Poppler.
 
-## Roda aksi file (Alt)
+## File actions wheel (Alt)
 
-Berlaku untuk file apa pun, termasuk folder dan pilihan campuran:
+Works on any file, including folders and mixed selections:
 
-- **Salin path**: path lengkap ke clipboard sebagai teks, satu baris per item.
-- **Salin**: file ke clipboard, siap di-paste di Explorer.
-- **Salin ke / Pindah ke**: pilih folder tujuan. Nama yang bentrok jadi `nama (1)`.
-- **Terminal**: buka folder (atau folder tempat file berada) di Windows Terminal, atau Command Prompt kalau Windows Terminal tidak ada.
-- **Explorer**: tampilkan item di Explorer.
+- **Copy path**: the full path to the clipboard as text, one line per item.
+- **Copy**: the files to the clipboard, ready to paste in Explorer.
+- **Copy to / Move to**: pick a destination folder. Clashing names become `name (1)`.
+- **Terminal**: open the folder (or the file's folder) in Windows Terminal, or Command Prompt if Windows Terminal isn't installed.
+- **Explorer**: show the item in Explorer.
 
-## Catatan
+## Notes
 
-- **Deteksi drag bersifat heuristik.** Windows tidak punya API global untuk "file sedang di-drag". Shiftwheel menganggap drag sedang terjadi kalau tombol kiri mouse ditahan dan kursor bergerak lebih dari 20 px. Roda juga bisa muncul kalau Shift/Ctrl/Alt diketuk saat menyeleksi teks atau memindah jendela. Roda hilang saat tombol mouse dilepas atau Esc ditekan, dan tidak ada yang diproses kalau tidak ada file yang di-drop.
-- **Roda hanya terbuka kalau tombol diketuk *selama* drag.** Menahan Ctrl/Shift sebelum mulai drag (kebiasaan copy/move di Explorer) tidak membuka roda.
-- **Isi roda ditebak dari tipe MIME** yang diberi Windows saat file masuk ke roda. Untuk ekstensi yang tidak dikenal Windows, roda konversi menampilkan format umum (PDF, DOCX, TXT, JPG, PNG, MP3, MP4). Validasi akhir tetap memakai ekstensi file, jadi pilihan yang tidak cocok ditolak dengan pesan yang jelas.
-- **Alt** saat drag kadang membuat app yang sedang aktif (mis. Explorer) mengaktifkan menu bar setelah drop. Tekan Alt atau Esc sekali lagi untuk menutupnya.
-- **HEIC** dibaca lewat ffmpeg dan belum diuji dengan foto iPhone asli.
-- **Tidak bekerja di atas jendela Administrator.** Hook global dari app biasa tidak menerima input saat kursor berada di atas jendela yang berjalan sebagai Administrator (batasan UIPI Windows).
-- **Peringatan SmartScreen.** Installer tidak di-code-sign, jadi Windows menampilkan "Windows protected your PC". Klik **More info** → **Run anyway**.
-- **Antivirus.** Hook keyboard/mouse global bisa dicurigai sebagian antivirus. Hook Shiftwheel hanya membaca tombol Shift, Ctrl, Alt, Esc, dan tombol kiri mouse beserta posisi kursor. Shiftwheel tidak merekam ketikan, tidak menyimpan input apa pun, dan tidak mengakses jaringan.
-- **Menu klik kanan di Windows 11** ada di bawah "Show more options" (menu klasik), karena menu baru Windows 11 hanya untuk app yang di-package dengan identitas MSIX.
-- Shift atau Ctrl saat drag membuat Explorer menganggapnya "move" atau "copy". Shiftwheel selalu membalas sebagai "copy", jadi file asli tidak pernah dipindah atau dihapus oleh drop ke roda.
+- **Drag detection is a heuristic.** Windows has no global API for "a file is being dragged". Shiftwheel assumes a drag is happening when the left mouse button is held and the cursor has moved more than about 20 px. The wheel can also open if you tap Shift/Ctrl/Alt while selecting text or moving a window. It closes when you release the mouse or press Esc, and nothing is processed unless a file is dropped.
+- **The wheel only opens when the key is tapped *during* the drag.** Holding Ctrl/Shift before you start dragging (the usual Explorer copy/move habit) doesn't open it.
+- **The wheel's contents are guessed from the MIME type** Windows provides when the file enters the wheel. For extensions Windows doesn't know, the convert wheel shows common formats (PDF, DOCX, TXT, JPG, PNG, MP3, MP4). The final check still uses the file extension, so a mismatched choice is rejected with a clear message.
+- **Alt** during a drag sometimes makes the active app (e.g. Explorer) highlight its menu bar after the drop. Press Alt or Esc once more to dismiss it.
+- **HEIC** is read through ffmpeg and hasn't been tested with real iPhone photos.
+- **Doesn't work over Administrator windows.** A global hook from a regular app gets no input while the cursor is over a window running as Administrator (a Windows UIPI restriction).
+- **SmartScreen warning.** The installer isn't code-signed, so Windows shows "Windows protected your PC". Click **More info** → **Run anyway**.
+- **Antivirus.** Some antivirus products may be suspicious of a global keyboard/mouse hook. Shiftwheel's hook only reads Shift, Ctrl, Alt, Esc, and the left mouse button plus the cursor position. It doesn't record keystrokes, store any input, or access the network.
+- **The context menu on Windows 11** is under "Show more options" (the classic menu), because the new Windows 11 menu is only for apps packaged with an MSIX identity.
+- Shift or Ctrl during a drag tells Explorer it's a "move" or "copy". Shiftwheel always answers "copy", so the original file is never moved or deleted by dropping it on the wheel.

@@ -1,37 +1,37 @@
-// Konversi file. Tidak bergantung pada Electron supaya bisa dites dengan node biasa.
+// File conversion. No Electron dependency, so it can be tested with plain Node.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
 const { pathToFileURL } = require('url');
-// sharp (libvips) dan pdf-lib baru dimuat saat konversi pertama: ~17 MB RAM yang tidak perlu selama idle
+// sharp (libvips) and pdf-lib load on first use: ~17 MB of RAM we don't need while idle
 let sharpLib = null;
 function sharp(...args) {
   if (!sharpLib) {
     sharpLib = require('sharp');
-    // Cache libvips membiarkan file input tetap terbuka; di Windows file itu jadi tidak bisa
-    // dihapus/dipindah selama Shiftwheel jalan. Tiap file cuma diproses sekali, jadi cache tidak perlu.
+    // The libvips cache keeps input files open; on Windows that means they can't be deleted or
+    // moved while Shiftwheel runs. Each file is processed once, so the cache buys nothing.
     sharpLib.cache(false);
   }
   return sharpLib(...args);
 }
 const pdfLib = () => require('pdf-lib');
 
-// Kategori file: ekstensi sumber dan format tujuan yang tampil di roda konversi
+// File categories: source extensions and the target formats shown on the convert wheel
 const CATEGORIES = {
-  image: { name: 'Gambar', exts: ['png', 'jpg', 'webp', 'gif', 'tiff', 'avif', 'bmp', 'heic', 'svg'], targets: ['jpg', 'png', 'webp', 'avif', 'tiff', 'gif', 'bmp', 'pdf', 'txt'] },
-  pdf: { name: 'PDF', exts: ['pdf'], targets: ['docx', 'txt', 'jpg', 'png'] },
-  document: { name: 'Dokumen', exts: ['doc', 'docx', 'odt', 'rtf', 'txt', 'html'], targets: ['pdf', 'docx', 'odt', 'rtf', 'txt', 'html'] },
-  sheet: { name: 'Spreadsheet', exts: ['xls', 'xlsx', 'ods', 'csv'], targets: ['pdf', 'xlsx', 'ods', 'csv'] },
-  slides: { name: 'Presentasi', exts: ['ppt', 'pptx', 'odp'], targets: ['pdf', 'pptx', 'odp'] },
-  audio: { name: 'Audio', exts: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff', 'wma', 'aac'], targets: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff'] },
-  video: { name: 'Video', exts: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'm4v'], targets: ['mp4', 'mov', 'mkv', 'webm', 'gif', 'mp3'] },
+  image: { name: 'Images', exts: ['png', 'jpg', 'webp', 'gif', 'tiff', 'avif', 'bmp', 'heic', 'svg'], targets: ['jpg', 'png', 'webp', 'avif', 'tiff', 'gif', 'bmp', 'pdf', 'txt'] },
+  pdf: { name: 'PDFs', exts: ['pdf'], targets: ['docx', 'txt', 'jpg', 'png'] },
+  document: { name: 'Documents', exts: ['doc', 'docx', 'odt', 'rtf', 'txt', 'html'], targets: ['pdf', 'docx', 'odt', 'rtf', 'txt', 'html'] },
+  sheet: { name: 'Spreadsheets', exts: ['xls', 'xlsx', 'ods', 'csv'], targets: ['pdf', 'xlsx', 'ods', 'csv'] },
+  slides: { name: 'Presentations', exts: ['ppt', 'pptx', 'odp'], targets: ['pdf', 'pptx', 'odp'] },
+  audio: { name: 'Audio files', exts: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff', 'wma', 'aac'], targets: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff'] },
+  video: { name: 'Videos', exts: ['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv', 'm4v'], targets: ['mp4', 'mov', 'mkv', 'webm', 'gif', 'mp3'] },
 };
-// Roda saat tipe file tidak diketahui (Windows tidak selalu memberi MIME): format paling umum
+// Wheel shown when the file type is unknown (Windows doesn't always give a MIME type): common formats
 const FALLBACK_TARGETS = ['pdf', 'docx', 'txt', 'jpg', 'png', 'mp3', 'mp4'];
 const ALIAS = { jpeg: 'jpg', tif: 'tiff', htm: 'html', aif: 'aiff', heif: 'heic' };
 
-// Filter ekspor LibreOffice per format tujuan
+// LibreOffice export filter per target format
 const LO_FILTER = {
   pdf: 'pdf',
   docx: 'docx:MS Word 2007 XML',
@@ -46,7 +46,7 @@ const LO_FILTER = {
   odp: 'odp',
 };
 
-// Argumen ffmpeg per format tujuan
+// ffmpeg arguments per target format
 const AUDIO_ARGS = {
   mp3: ['-c:a', 'libmp3lame', '-q:a', '2'],
   m4a: ['-c:a', 'aac', '-b:a', '192k'],
@@ -66,7 +66,7 @@ const VIDEO_ARGS = {
   mp3: ['-vn', ...AUDIO_ARGS.mp3],
 };
 
-// ---------- Utilitas ----------
+// ---------- Utilities ----------
 
 function extOf(file) {
   const e = path.extname(file).slice(1).toLowerCase();
@@ -80,7 +80,7 @@ function categoryOf(file) {
   return Object.keys(CATEGORIES).find((k) => CATEGORIES[k].exts.includes(ext)) || null;
 }
 
-// Cari nama yang belum dipakai: nama.ext, nama (1).ext, nama (2).ext, ... (ext kosong untuk folder)
+// Find an unused name: name.ext, name (1).ext, name (2).ext, ... (empty ext for folders)
 function uniquePath(dir, base, ext) {
   const name = (b) => (ext ? `${b}.${ext}` : b);
   let candidate = path.join(dir, name(base));
@@ -102,7 +102,7 @@ function run(cmd, args, timeout = 120000, env = process.env) {
 
 const readdir = (dir) => { try { return fs.readdirSync(dir); } catch { return []; } };
 
-// Cari program bantu: folder install umum, paket winget (belum tentu masuk PATH proses ini), lalu PATH
+// Find a helper program: common install folders, winget packages (not always on this process's PATH), then PATH
 function findTool(name, roots = []) {
   const winget = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WinGet');
   const candidates = [...roots];
@@ -139,11 +139,11 @@ async function withTmpDir(fn) {
 
 const lastLine = (s) => String(s || '').trim().split(/\r?\n/).pop().slice(0, 160);
 
-// ---------- OCR (bawaan Windows, offline) ----------
+// ---------- OCR (built into Windows, offline) ----------
 
-// OCR Windows hanya tersedia sebagai WinRT API, jadi dipanggil lewat PowerShell 5.1.
-// Input: env SW_OCR = JSON array path gambar. Output: JSON array teks (satu per gambar).
-// Exit 3 = tidak ada bahasa OCR terpasang.
+// Windows OCR only exists as a WinRT API, so it's called through PowerShell 5.1.
+// Input: env SW_OCR = JSON array of image paths. Output: JSON array of texts (one per image).
+// Exit 3 = no OCR language installed.
 const OCR_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
@@ -175,20 +175,20 @@ async function ocr(images) {
     stdout = await run('powershell.exe', args, 300000, { ...process.env, SW_OCR: JSON.stringify(images) });
   } catch (err) {
     if (err.code === 3) {
-      throw new Error('OCR Windows belum punya bahasa. Tambahkan bahasa Inggris (dengan fitur OCR) di Settings > Time & language > Language.');
+      throw new Error('Windows OCR has no language installed. Add English (with the OCR feature) in Settings > Time & language > Language.');
     }
-    throw new Error(`OCR Windows gagal membaca gambar. ${lastLine(err.stderr)}`.trim());
+    throw new Error(`Windows OCR couldn't read the image. ${lastLine(err.stderr)}`.trim());
   }
   return JSON.parse(String(stdout).trim()).map((t) => String(t || '').trim());
 }
 
-// Halaman PDF tanpa lapisan teks (hasil scan/foto): render ke PNG lalu OCR
+// PDF pages without a text layer (scans/photos): render to PNG, then OCR
 async function ocrPdf(input, tmp) {
   try {
     await run(findTool('pdftoppm'), ['-png', '-r', '200', input, path.join(tmp, 'ocr')]);
   } catch (err) {
-    if (err.code === 'ENOENT') throw new Error('PDF ini berisi gambar, bukan teks. Untuk membacanya (OCR) perlu Poppler: winget install oschwartz10612.Poppler');
-    throw new Error('pdftoppm gagal membaca PDF (rusak atau terkunci password).');
+    if (err.code === 'ENOENT') throw new Error('This PDF contains images, not text. Reading it (OCR) needs Poppler: winget install oschwartz10612.Poppler');
+    throw new Error("pdftoppm couldn't read the PDF (damaged or password-protected).");
   }
   const pages = readdir(tmp).filter((f) => f.startsWith('ocr') && f.endsWith('.png')).sort().map((f) => path.join(tmp, f));
   return (await ocr(pages)).filter(Boolean).join('\n\n');
@@ -201,15 +201,15 @@ async function probeDuration(input) {
     const out = await run(findTool('ffprobe'), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', input]);
     return Number(String(out).trim()) || null;
   } catch {
-    return null; // tanpa durasi, progres tampil tak tentu
+    return null; // without a duration, progress shows as indeterminate
   }
 }
 
-// onProgress(0..1) dipanggil dari laporan -progress ffmpeg kalau durasi input diketahui
+// onProgress(0..1) is fed from ffmpeg's -progress report when the input duration is known
 async function ffmpeg(args, onProgress) {
   const duration = onProgress ? await probeDuration(args[args.indexOf('-i') + 1]) : null;
   await new Promise((resolve, reject) => {
-    // Tanpa timeout: video panjang bisa makan waktu lama
+    // No timeout: long videos can take a while
     const child = spawn(findTool('ffmpeg'), ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-progress', 'pipe:1', '-nostats', ...args], { windowsHide: true });
     let stderr = '';
     let pending = '';
@@ -223,16 +223,16 @@ async function ffmpeg(args, onProgress) {
       }
     });
     child.on('error', (err) => {
-      reject(err.code === 'ENOENT' ? new Error('ffmpeg tidak ditemukan. Install dulu: winget install Gyan.FFmpeg') : err);
+      reject(err.code === 'ENOENT' ? new Error('ffmpeg not found. Install it first: winget install Gyan.FFmpeg') : err);
     });
     child.on('close', (code) => {
       if (code === 0) resolve();
-      else reject(new Error(`ffmpeg gagal memproses file. ${lastLine(stderr)}`.trim()));
+      else reject(new Error(`ffmpeg couldn't process the file. ${lastLine(stderr)}`.trim()));
     });
   });
 }
 
-// Tulis ke folder tmp dulu supaya file setengah jadi tidak tertinggal kalau gagal
+// Write to a temp folder first so a half-written file never stays behind on failure
 async function ffmpegTo(input, args, out, onProgress) {
   await withTmpDir(async (tmp) => {
     const tmpOut = path.join(tmp, `out${path.extname(out)}`);
@@ -252,7 +252,7 @@ function toPt(value) {
   return m ? m[1] * UNIT_PT[m[2]] : 0;
 }
 
-// Isi teks dari potongan XML ODF
+// Plain text from a snippet of ODF XML
 function xmlText(xml) {
   return xml
     .replace(/<text:s text:c="(\d+)"\/>/g, (_, n) => ' '.repeat(n))
@@ -268,16 +268,16 @@ function xmlText(xml) {
     .trim();
 }
 
-// Import PDF di Writer menaruh tiap potongan teks di frame terpisah dengan urutan acak,
-// dan ekspor TXT mengabaikan frame. Jadi teks diambil dari FODT lalu diurutkan sesuai posisi.
-// ponytail: tata letak kolom/tabel jadi baris berurutan kiri->kanan, cukup untuk teks biasa.
+// Writer's PDF import puts each piece of text in its own frame, in no particular order,
+// and TXT export ignores frames. So we read the text from FODT and sort it by position.
+// ponytail: column/table layouts become rows read left->right; fine for ordinary text.
 function fodtToText(xml) {
   const frames = [...xml.matchAll(/<draw:frame\b([^>]*)>([\s\S]*?)<\/draw:frame>/g)]
     .map(([, a, body]) => ({
       page: Number(attr(a, 'text:anchor-page-number')) || 0,
       x: toPt(attr(a, 'svg:x')),
-      bottom: toPt(attr(a, 'svg:y')) + toPt(attr(a, 'svg:height')), // dekat baseline, stabil antar ukuran font
-      // hanya isi text-box; frame gambar menyimpan data base64 yang bukan teks
+      bottom: toPt(attr(a, 'svg:y')) + toPt(attr(a, 'svg:height')), // near the baseline, stable across font sizes
+      // text boxes only; image frames carry base64 data that isn't text
       text: xmlText((/<draw:text-box\b[^>]*>([\s\S]*?)<\/draw:text-box>/.exec(body) || [])[1] || ''),
     }))
     .filter((f) => f.text)
@@ -303,7 +303,7 @@ function fodtToText(xml) {
 }
 
 async function viaLibreOffice(input, out, fmt) {
-  // Profil terpisah supaya tidak bentrok dengan LibreOffice yang sedang dibuka user
+  // Separate profile so it never clashes with a LibreOffice window the user has open
   const profile = pathToFileURL(path.join(os.tmpdir(), 'shiftwheel-lo-profile')).href;
   const src = extOf(input);
   const infilter = src === 'pdf' ? 'writer_pdf_import' : src === 'csv' ? 'CSV:44,34,76' : null;
@@ -318,33 +318,33 @@ async function viaLibreOffice(input, out, fmt) {
       '--outdir', tmp,
       input,
     ];
-    // Coba ulang sekali: start pertama LibreOffice (membuat profil) atau profil yang sedang
-    // dipakai proses lain kadang gagal tanpa alasan jelas, percobaan kedua biasanya berhasil.
+    // Retry once: LibreOffice's first start (creating its profile) or a profile in use by another
+    // process sometimes fails for no clear reason; the second attempt usually works.
     for (let attempt = 1; ; attempt++) {
       try {
         await run(findSoffice(), args);
       } catch (err) {
-        if (err.code === 'ENOENT') throw new Error('LibreOffice tidak ditemukan. Install LibreOffice dulu.');
-        if (err.killed) throw new Error('LibreOffice terlalu lama merespons (lebih dari 2 menit).');
+        if (err.code === 'ENOENT') throw new Error('LibreOffice not found. Install LibreOffice first.');
+        if (err.killed) throw new Error('LibreOffice took too long to respond (over 2 minutes).');
         if (attempt < 2) continue;
-        throw new Error(`LibreOffice gagal mengonversi file. ${lastLine(err.stderr)}`.trim());
+        throw new Error(`LibreOffice couldn't convert the file. ${lastLine(err.stderr)}`.trim());
       }
       if (attempt >= 2 || readdir(tmp).some((f) => extOf(f) === ext)) break;
     }
     const produced = readdir(tmp).find((f) => extOf(f) === ext);
-    if (!produced) throw new Error('LibreOffice tidak menghasilkan file. Pastikan file tidak rusak atau terkunci.');
+    if (!produced) throw new Error("LibreOffice didn't produce a file. Make sure the file isn't damaged or locked.");
     if (!pdfText) return fs.copyFileSync(path.join(tmp, produced), out);
-    // PDF tanpa lapisan teks (scan/foto) dibaca dengan OCR.
-    // ponytail: PDF campuran (sebagian halaman scan) hanya mengambil halaman yang punya teks.
+    // PDFs without a text layer (scans/photos) are read with OCR.
+    // ponytail: mixed PDFs (some scanned pages) only get text from pages that have a text layer.
     const text = fodtToText(fs.readFileSync(path.join(tmp, produced), 'utf8')) || await ocrPdf(input, tmp);
-    if (!text) throw new Error('Tidak ada teks yang terbaca di PDF ini, juga lewat OCR.');
+    if (!text) throw new Error('No readable text found in this PDF, not even with OCR.');
     fs.writeFileSync(out, text + '\n');
   });
 }
 
-// ---------- Gambar ----------
+// ---------- Images ----------
 
-// sharp tidak bisa membaca BMP/HEIC: ubah dulu ke PNG lewat ffmpeg
+// sharp can't read BMP/HEIC: convert to PNG through ffmpeg first
 async function sharpInput(input, tmp) {
   if (!['bmp', 'heic'].includes(extOf(input))) return input;
   const png = path.join(tmp, `${path.basename(input)}.png`);
@@ -361,14 +361,14 @@ const ENCODE = {
   gif: (img) => img.gif(),
 };
 
-// Satu atau beberapa gambar jadi satu PDF, satu halaman per gambar (lebar 595 pt)
+// One or more images into one PDF, one page per image (595 pt wide)
 async function imagesToPdf(files, out) {
   const doc = await pdfLib().PDFDocument.create();
   await withTmpDir(async (tmp) => {
     for (const file of files) {
       const isJpg = extOf(file) === 'jpg';
       const img = sharp(await sharpInput(file, tmp), { animated: false }).autoOrient();
-      // pdf-lib hanya bisa embed JPG/PNG: JPG tetap JPG, sisanya jadi PNG (lossless)
+      // pdf-lib can only embed JPG/PNG: JPG stays JPG, everything else becomes PNG (lossless)
       const { data, info } = await (isJpg ? img.jpeg({ quality: 92 }) : img.png()).toBuffer({ resolveWithObject: true });
       const embedded = isJpg ? await doc.embedJpg(data) : await doc.embedPng(data);
       const width = 595;
@@ -383,12 +383,12 @@ async function imageToText(input, out) {
   await withTmpDir(async (tmp) => {
     const img = sharp(await sharpInput(input, tmp), { animated: false }).autoOrient();
     const { width = 0 } = (await img.metadata()).autoOrient || {};
-    // Teks kecil lebih terbaca kalau gambarnya diperbesar; gambar raksasa diperkecil
+    // Small text reads better when the image is upscaled; huge images get scaled down
     const resize = width && width < 1200 ? { width: width * 2 } : { width: 4000, height: 4000, fit: 'inside', withoutEnlargement: true };
     const png = path.join(tmp, 'ocr.png');
     await img.resize(resize).flatten({ background: '#ffffff' }).png().toFile(png);
     const [text] = await ocr([png]);
-    if (!text) throw new Error('Tidak ada teks yang terbaca di gambar ini.');
+    if (!text) throw new Error('No readable text found in this image.');
     fs.writeFileSync(out, text + '\n');
   });
 }
@@ -398,10 +398,10 @@ async function convertImage(input, out, fmt) {
   if (fmt === 'txt') return imageToText(input, out);
   await withTmpDir(async (tmp) => {
     const src = await sharpInput(input, tmp);
-    // Animasi GIF/WebP dipertahankan kalau tujuannya juga mendukung animasi
+    // GIF/WebP animation is kept when the target supports animation too
     const animated = ['gif', 'webp'].includes(fmt) && ['gif', 'webp'].includes(extOf(input));
     let img = sharp(src, { animated });
-    if (!animated) img = img.autoOrient(); // ikuti orientasi EXIF
+    if (!animated) img = img.autoOrient(); // follow EXIF orientation
     if (fmt === 'bmp') {
       const png = path.join(tmp, 'flat.png');
       await img.flatten({ background: '#ffffff' }).png().toFile(png);
@@ -411,23 +411,23 @@ async function convertImage(input, out, fmt) {
   });
 }
 
-// ---------- PDF ke gambar ----------
+// ---------- PDF to images ----------
 
-// like: file yang folder & namanya dipakai untuk hasil (default PDF-nya sendiri)
+// like: the file whose folder and name are used for the results (defaults to the PDF itself)
 async function pdfToImages(input, out, fmt, like = input) {
   return withTmpDir(async (tmp) => {
     try {
       await run(findTool('pdftoppm'), [fmt === 'jpg' ? '-jpeg' : '-png', '-r', '150', input, path.join(tmp, 'p')]);
     } catch (err) {
-      if (err.code === 'ENOENT') throw new Error('pdftoppm tidak ditemukan. Install Poppler dulu: winget install oschwartz10612.Poppler');
-      throw new Error('pdftoppm gagal membaca PDF (rusak atau terkunci password).');
+      if (err.code === 'ENOENT') throw new Error('pdftoppm not found. Install Poppler first: winget install oschwartz10612.Poppler');
+      throw new Error("pdftoppm couldn't read the PDF (damaged or password-protected).");
     }
-    const pages = readdir(tmp).sort(); // p-01.jpg, p-02.jpg, ... (nomor sudah di-pad)
+    const pages = readdir(tmp).sort(); // p-01.jpg, p-02.jpg, ... (numbers are zero-padded)
     if (pages.length === 1) {
       fs.copyFileSync(path.join(tmp, pages[0]), out);
       return out;
     }
-    // Banyak halaman: "nama 1.jpg", "nama 2.jpg", ...
+    // Several pages: "name 1.jpg", "name 2.jpg", ...
     const outs = pages.map((p, i) => {
       const dest = uniquePath(path.dirname(like), `${baseOf(like)} ${i + 1}`, fmt);
       fs.copyFileSync(path.join(tmp, p), dest);
@@ -437,7 +437,7 @@ async function pdfToImages(input, out, fmt, like = input) {
   });
 }
 
-// ---------- Konversi utama ----------
+// ---------- Main conversion ----------
 
 const CONVERTERS = {
   image: convertImage,
@@ -451,34 +451,34 @@ const CONVERTERS = {
 
 function checkInput(input) {
   if (typeof input !== 'string' || !fs.existsSync(input)) {
-    throw new Error(`File tidak ditemukan: ${path.basename(String(input || ''))}`);
+    throw new Error(`File not found: ${path.basename(String(input || ''))}`);
   }
-  if (!fs.statSync(input).isFile()) throw new Error('Folder tidak bisa diproses. Pilih file.');
+  if (!fs.statSync(input).isFile()) throw new Error("Folders can't be processed. Pick a file.");
 }
 
 /**
- * Konversi satu file ke format tujuan. Hasil disimpan di folder yang sama.
- * Mengembalikan path hasil (halaman pertama untuk PDF multi-halaman).
- * Error dengan `skipped = true` berarti file dilewati.
- * opts.onProgress(0..1) dipanggil selama konversi audio/video.
+ * Convert one file to a target format. The result goes next to the source.
+ * Returns the output path (the first page for multi-page PDFs).
+ * An error with `skipped = true` means the file was skipped.
+ * opts.onProgress(0..1) is called during audio/video conversion.
  */
 async function convert(input, fmt, opts = {}) {
   fmt = ALIAS[String(fmt || '').toLowerCase()] || String(fmt || '').toLowerCase();
   const allTargets = new Set(Object.values(CATEGORIES).flatMap((c) => c.targets));
-  if (!allTargets.has(fmt)) throw new Error(`Format tujuan tidak dikenal: ${fmt}`);
+  if (!allTargets.has(fmt)) throw new Error(`Unknown target format: ${fmt}`);
   checkInput(input);
 
   const src = extOf(input);
   if (src === fmt) {
-    const err = new Error(`Sudah berformat ${fmt.toUpperCase()}`);
+    const err = new Error(`Already a ${fmt.toUpperCase()} file`);
     err.skipped = true;
     throw err;
   }
 
   const cat = categoryOf(input);
-  if (!cat) throw new Error(src ? `Tipe file .${src} tidak didukung.` : 'File tanpa ekstensi tidak didukung.');
+  if (!cat) throw new Error(src ? `.${src} files aren't supported.` : "Files without an extension aren't supported.");
   if (!CATEGORIES[cat].targets.includes(fmt)) {
-    throw new Error(`${CATEGORIES[cat].name} tidak bisa dikonversi ke ${fmt.toUpperCase()}.`);
+    throw new Error(`${CATEGORIES[cat].name} can't be converted to ${fmt.toUpperCase()}.`);
   }
 
   const out = uniquePath(path.dirname(input), baseOf(input), fmt);

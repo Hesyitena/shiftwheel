@@ -1,6 +1,6 @@
-// Buat semua ikon dari SVG: assets/icon.svg + icon.png (256), assets/tray-16/24/32.png, build/icon.ico.
-// Ukuran kecil (<= 32 px) memakai versi 4 segmen yang lebih tebal supaya tetap tajam.
-// Jalan otomatis sebelum `npm run dist`.
+// Build every icon from SVG: assets/icon.svg + icon.png (256), assets/tray-16/24/32.png, build/icon.ico.
+// Small sizes (<= 32 px) use a bolder 4-segment version so they stay crisp.
+// Runs automatically before `npm run dist`.
 const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
@@ -8,13 +8,13 @@ const sharp = require('sharp');
 const root = path.join(__dirname, '..');
 const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
 
-// Tile hitam membulat + roda putih dengan satu segmen menyala (sama seperti UI roda)
+// Rounded black tile + white wheel with one lit segment (same as the wheel UI)
 function iconSvg(size, small) {
   const C = 128;
   const [R, r, n, gap, lit, dim] = small ? [94, 44, 4, 16, 0, 0.32] : [84, 44, 6, 10, 1, 0.24];
   const pt = (rad, deg) => [C + rad * Math.cos((deg * Math.PI) / 180), C + rad * Math.sin((deg * Math.PI) / 180)];
   const f = (p) => p.map((v) => v.toFixed(2)).join(' ');
-  const corner = 5; // sudut segmen dibulatkan lewat stroke tebal berwarna sama
+  const corner = 5; // segment corners are rounded by a thick stroke of the same color
   const segs = [];
   for (let i = 0; i < n; i++) {
     const step = 360 / n;
@@ -40,19 +40,19 @@ const png = (size) => sharp(Buffer.from(iconSvg(size, size <= 32))).png().toBuff
   fs.writeFileSync(path.join(root, 'assets', 'icon.png'), await png(256));
   for (const s of [16, 24, 32]) fs.writeFileSync(path.join(root, 'assets', `tray-${s}.png`), await png(s));
 
-  // ICO berisi PNG per ukuran (didukung sejak Windows Vista)
+  // The ICO holds one PNG per size (supported since Windows Vista)
   const images = await Promise.all(ICO_SIZES.map(png));
   const header = Buffer.alloc(6);
   header.writeUInt16LE(0, 0); // reserved
-  header.writeUInt16LE(1, 2); // tipe: icon
+  header.writeUInt16LE(1, 2); // type: icon
   header.writeUInt16LE(images.length, 4);
   let offset = 6 + 16 * images.length;
   const entries = images.map((img, i) => {
     const e = Buffer.alloc(16);
-    e.writeUInt8(ICO_SIZES[i] % 256, 0); // 256 ditulis 0
+    e.writeUInt8(ICO_SIZES[i] % 256, 0); // 256 is written as 0
     e.writeUInt8(ICO_SIZES[i] % 256, 1);
     e.writeUInt16LE(1, 4); // color planes
-    e.writeUInt16LE(32, 6); // bit per piksel
+    e.writeUInt16LE(32, 6); // bits per pixel
     e.writeUInt32LE(img.length, 8);
     e.writeUInt32LE(offset, 12);
     offset += img.length;
@@ -61,5 +61,5 @@ const png = (size) => sharp(Buffer.from(iconSvg(size, size <= 32))).png().toBuff
   const out = path.join(root, 'build', 'icon.ico');
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, Buffer.concat([header, ...entries, ...images]));
-  console.log(`Ikon dibuat: icon.svg, icon.png, tray-16/24/32.png, icon.ico (${ICO_SIZES.join(', ')} px)`);
+  console.log(`Icons built: icon.svg, icon.png, tray-16/24/32.png, icon.ico (${ICO_SIZES.join(', ')} px)`);
 })();

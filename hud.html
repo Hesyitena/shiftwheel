@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-FG5MJNVHSXp/WgGCY79U1vkHsT3uU4zlVaDROKEqaNs='; style-src 'sha256-XkW3sFJlDcjSnoKIDuNMyRR6Kyf5qe0dKUq+nfhzwys='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-YQvbRiMWhpVwyiWfR361LOUtJPSx/X1y/37N4YFS9mE='; style-src 'sha256-8/T07C+kv9AgeNFEsRa5r7PiLLJT5cqeQu7Aw2zHGpA='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -28,7 +28,7 @@
   #pct { font-size: 12px; font-weight: 500; color: var(--sub); font-variant-numeric: tabular-nums; }
   #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--track); }
   #bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--ink); transition: width 160ms linear; }
-  /* Tanpa persentase (LibreOffice, sharp, OCR): potongan kecil yang bergerak */
+  /* No percentage (LibreOffice, sharp, OCR): a small moving sliver */
   #bar.busy i { width: 24%; animation: busy 1.2s ease-in-out infinite; transition: none; }
   @keyframes busy { from { left: -24%; } to { left: 100%; } }
   @media (prefers-reduced-motion: reduce) { #bar.busy i { animation: none; left: 0; width: 100%; opacity: .3; } #card { transition: none; } }
@@ -41,14 +41,14 @@
   <div id="bar"><i></i></div>
 </div>
 <script>
-  // Kartu progres kecil di pojok layar selama antrean berjalan
+  // Small progress card in the screen corner while the queue runs
   const $ = (id) => document.getElementById(id);
   const fill = document.querySelector('#bar i');
 
   window.shiftwheel.onHud((s) => {
     document.body.classList.remove('hidden');
     $('name').textContent = s.name;
-    $('sub').textContent = s.total > 1 ? `${s.label}  ·  ${s.index} dari ${s.total}` : s.label;
+    $('sub').textContent = s.total > 1 ? `${s.label}  ·  ${s.index} of ${s.total}` : s.label;
     const known = typeof s.percent === 'number';
     $('bar').classList.toggle('busy', !known);
     fill.style.width = known ? `${Math.round(s.percent * 100)}%` : '';
