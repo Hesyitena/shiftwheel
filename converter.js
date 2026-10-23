@@ -413,7 +413,8 @@ async function convertImage(input, out, fmt) {
 
 // ---------- PDF ke gambar ----------
 
-async function pdfToImages(input, out, fmt) {
+// like: file yang folder & namanya dipakai untuk hasil (default PDF-nya sendiri)
+async function pdfToImages(input, out, fmt, like = input) {
   return withTmpDir(async (tmp) => {
     try {
       await run(findTool('pdftoppm'), [fmt === 'jpg' ? '-jpeg' : '-png', '-r', '150', input, path.join(tmp, 'p')]);
@@ -428,7 +429,7 @@ async function pdfToImages(input, out, fmt) {
     }
     // Banyak halaman: "nama 1.jpg", "nama 2.jpg", ...
     const outs = pages.map((p, i) => {
-      const dest = uniquePath(path.dirname(input), `${baseOf(input)} ${i + 1}`, fmt);
+      const dest = uniquePath(path.dirname(like), `${baseOf(like)} ${i + 1}`, fmt);
       fs.copyFileSync(path.join(tmp, p), dest);
       return dest;
     });
@@ -500,7 +501,11 @@ module.exports = {
   withTmpDir,
   findSoffice,
   findTool,
+  ffmpeg,
   ffmpegTo,
+  probeDuration,
+  viaLibreOffice,
+  pdfToImages,
   sharpInput,
   imagesToPdf,
   fodtToText,

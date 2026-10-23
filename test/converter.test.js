@@ -7,7 +7,7 @@ const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
 const sharp = require('sharp');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
-const { convert, findSoffice, findTool, fodtToText, imagesToPdf } = require('../converter');
+const { convert, findSoffice, findTool, fodtToText, imagesToPdf, probeDuration } = require('../converter');
 const { toolTasks } = require('../tools');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shiftwheel-test-'));
@@ -226,6 +226,55 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
     assert.strictEqual((await runTool('audio.normalize', [p('nada.wav')]))[0], p('nada (normal).wav'));
     assert.strictEqual((await runTool('audio.mono', [p('nada.wav')]))[0], p('nada (mono).wav'));
   }, noFf);
+  // ---------- Tools tambahan ----------
+  const dims = async (f) => { const m = await sharp(f).metadata(); return [m.width, m.height]; };
+  const near = (actual, expected, tol, what) => assert.ok(Math.abs(actual - expected) <= tol, `${what}: ${actual} (harusnya ~${expected})`);
+
+  await test('tool gambar: cermin, pangkas tepi, persegi', async () => {
+    const [flip] = await runTool('image.flip', [p('gambar.png')]);
+    assert.deepStrictEqual(await dims(flip), [200, 100]);
+    // Kotak hitam 50x50 di tengah kanvas putih 200x200 -> pangkas jadi 50x50
+    await sharp({ create: { width: 200, height: 200, channels: 3, background: '#fff' } })
+      .composite([{ input: { create: { width: 50, height: 50, channels: 3, background: '#000' } }, left: 75, top: 75 }]).png().toFile(p('bingkai.png'));
+    assert.deepStrictEqual(await dims((await runTool('image.trim', [p('bingkai.png')]))[0]), [50, 50]);
+    assert.deepStrictEqual(await dims((await runTool('image.square', [p('foto.jpg')]))[0]), [600, 600]);
+  });
+  await test('tool PDF: nomor halaman dan balik urutan', async () => {
+    const two = await PDFDocument.create();
+    two.addPage([300, 300]);
+    two.addPage([600, 400]);
+    fs.writeFileSync(p('ukuran.pdf'), await two.save());
+    const [rev] = await runTool('pdf.reverse', [p('ukuran.pdf')]);
+    assert.strictEqual((await PDFDocument.load(fs.readFileSync(rev))).getPage(0).getWidth(), 600);
+    const [num] = await runTool('pdf.number', [p('ukuran.pdf')]);
+    const text = execFileSync(findTool('pdftotext'), [num, '-'], { windowsHide: true }).toString();
+    assert.match(text, /1\s*\/\s*2[\s\S]*2\s*\/\s*2/); // pdftotext bisa membuang spasi tipis: "1/2"
+  }, noPoppler);
+  await test('tool video: thumbnail dan 2× cepat', async () => {
+    const [thumb] = await runTool('video.thumb', [p('klip.mp4')]);
+    startsWith(thumb, JPG);
+    const [fast] = await runTool('video.fast', [p('klip.mp4')]);
+    near(await probeDuration(fast), 0.5, 0.15, 'durasi 2× cepat');
+  }, noFf);
+  await test('tool audio: kurangi bising, potong hening, 1,5× cepat, fade', async () => {
+    ff('-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-af', 'adelay=1000,apad=pad_dur=1', p('jeda.wav')); // 1 dtk hening + 1 dtk nada + 1 dtk hening
+    near(await probeDuration((await runTool('audio.trim', [p('jeda.wav')]))[0]), 1, 0.2, 'durasi setelah potong hening');
+    near(await probeDuration((await runTool('audio.fast', [p('nada.wav')]))[0]), 1 / 1.5, 0.1, 'durasi 1,5× cepat');
+    assert.ok(fs.statSync((await runTool('audio.denoise', [p('nada.wav')]))[0]).size > 1000);
+    assert.ok(fs.statSync((await runTool('audio.fade', [p('nada.wav')]))[0]).size > 1000);
+  }, noFf);
+  await test('tool dokumen: gabung jadi PDF, gambar per halaman/slide', async () => {
+    const [merged] = await runTool('document.merge', [p('catatan.txt'), p('catatan.docx')]);
+    assert.ok(path.basename(merged).startsWith('Gabungan'));
+    assert.strictEqual(await pages(merged), 2);
+    const [single] = await runTool('document.pages', [p('catatan.txt')]);
+    assert.strictEqual(single, p('catatan (halaman).png'));
+    startsWith(single, PNG);
+    const [slide1] = await runTool('slides.pages', [p('dokumen.odp')]); // 2 slide dari tes presentasi
+    assert.strictEqual(path.extname(slide1), '.png');
+    assert.ok(fs.existsSync(slide1.replace(/1\.png$/, '2.png')), 'slide kedua tidak ada');
+  }, noLo || noPoppler);
+
   await test('tool salah kategori ditolak', () => rejects(runTool('pdf.rotate', [p('gambar.png')]), /tidak berlaku untuk file \.png/));
   await test('gabung butuh minimal 2 file', () => rejects(runTool('pdf.merge', [p('dokumen.pdf')]), /minimal 2 file/));
   await test('tool tidak dikenal', () => assert.throws(() => toolTasks('image.sulap', [p('gambar.png')]), /Tool tidak dikenal/));

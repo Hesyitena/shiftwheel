@@ -2,7 +2,8 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  sharp, pdfLib, AUDIO_ARGS, H264, extOf, baseOf, categoryOf, uniquePath, checkInput, withTmpDir, ffmpegTo, sharpInput, imagesToPdf,
+  sharp, pdfLib, AUDIO_ARGS, H264, extOf, baseOf, categoryOf, uniquePath, checkInput, withTmpDir, ffmpeg, ffmpegTo, probeDuration,
+  sharpInput, imagesToPdf, viaLibreOffice, pdfToImages,
 } = require('./converter');
 
 // "foto.jpg" -> "foto (dikompres).jpg" di folder yang sama
@@ -43,6 +44,11 @@ async function compressImage(file) {
     throw skip('Sudah optimal, hasil kompres tidak lebih kecil');
   }
   return out;
+}
+
+function squareCrop(img, meta) {
+  const side = Math.min(meta.autoOrient.width, meta.autoOrient.height);
+  return img.resize(side, side, { fit: 'cover', position: 'attention' }); // 'attention': pilih area paling menonjol
 }
 
 async function mergeImagesToPdf(files) {
@@ -105,6 +111,60 @@ function stripPdfMetadata(doc) {
   doc.catalog.delete(pdfLib().PDFName.of('Metadata')); // XMP
 }
 
+// Nomor "1 / 5" kecil di tengah bawah tiap halaman.
+// ponytail: halaman yang diputar (/Rotate) mendapat nomor di sisi "bawah" versi tak-terputar.
+async function numberPages(doc) {
+  const { StandardFonts, rgb } = pdfLib();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const pages = doc.getPages();
+  pages.forEach((page, i) => {
+    const text = `${i + 1} / ${pages.length}`;
+    const size = 9;
+    page.drawText(text, { x: (page.getWidth() - font.widthOfTextAtSize(text, size)) / 2, y: 18, size, font, color: rgb(0.4, 0.4, 0.4) });
+  });
+}
+
+async function reversePdf(file) {
+  const doc = await loadPdf(file);
+  if (doc.getPageCount() < 2) throw skip('PDF hanya 1 halaman');
+  const out = await pdfLib().PDFDocument.create();
+  for (const page of await out.copyPages(doc, doc.getPageIndices().reverse())) out.addPage(page);
+  const dest = suffixed(file, 'urutan terbalik');
+  fs.writeFileSync(dest, await out.save());
+  return dest;
+}
+
+// ---------- Dokumen, spreadsheet, presentasi (LibreOffice) ----------
+
+async function mergeDocsToPdf(files) {
+  const merged = await pdfLib().PDFDocument.create();
+  await withTmpDir(async (tmp) => {
+    for (const [i, file] of files.entries()) {
+      const pdf = path.join(tmp, `${i}.pdf`);
+      await viaLibreOffice(file, pdf, 'pdf');
+      const doc = await loadPdf(pdf);
+      for (const page of await merged.copyPages(doc, doc.getPageIndices())) merged.addPage(page);
+    }
+  });
+  const out = uniquePath(path.dirname(files[0]), 'Gabungan', 'pdf');
+  fs.writeFileSync(out, await merged.save());
+  return out;
+}
+
+// Tiap halaman/slide jadi PNG: "laporan 1.png", "laporan 2.png" (satu halaman: "laporan (halaman).png")
+function docPages(file) {
+  return withTmpDir(async (tmp) => {
+    const pdf = path.join(tmp, 'doc.pdf');
+    await viaLibreOffice(file, pdf, 'pdf');
+    return pdfToImages(pdf, suffixed(file, 'halaman', 'png'), 'png', file);
+  });
+}
+
+const DOC_TOOLS = (pagesLabel, pagesCaption) => [
+  { id: 'merge', icon: 'merge', label: 'Gabung PDF', caption: 'Gabung semua jadi satu PDF', multi: true, all: mergeDocsToPdf },
+  { id: 'pages', icon: 'image', label: pagesLabel, caption: pagesCaption, each: docPages },
+];
+
 // ---------- Video & audio (ffmpeg) ----------
 
 const H264_LIGHT = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '28', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k'];
@@ -120,6 +180,31 @@ function audio(file, label, args, opts, ext = AUDIO_ARGS[extOf(file)] ? extOf(fi
   return ffmpegTo(file, ['-vn', ...args, ...AUDIO_ARGS[ext]], out, opts.onProgress).then(() => out);
 }
 
+// Progres ffmpeg diukur terhadap durasi input; kalau hasil dipercepat, skalakan supaya tetap sampai 100%
+const faster = (opts, factor) => ({ onProgress: opts.onProgress && ((p) => opts.onProgress(Math.min(1, p * factor))) });
+
+// Frame dari tengah video (-ss sebelum -i: lompat langsung, tidak mendekode separuh video)
+async function videoThumb(file) {
+  const out = suffixed(file, 'thumbnail', 'jpg');
+  const duration = (await probeDuration(file)) || 0;
+  await withTmpDir(async (tmp) => {
+    const jpg = path.join(tmp, 'thumb.jpg');
+    await ffmpeg(['-ss', (duration / 2).toFixed(2), '-i', file, '-frames:v', '1', '-q:v', '2', jpg]);
+    fs.copyFileSync(jpg, out);
+  });
+  return out;
+}
+
+async function fadeAudio(file, opts) {
+  const duration = (await probeDuration(file)) || 0;
+  const d = Math.min(2, duration / 4); // klip pendek: fade lebih singkat
+  const fade = `afade=t=in:d=${d.toFixed(2)},afade=t=out:st=${Math.max(0, duration - d).toFixed(2)}:d=${d.toFixed(2)}`;
+  return audio(file, 'fade', ['-af', fade], opts);
+}
+
+// Buang hening di awal, balik, buang lagi (= hening di akhir), balik lagi
+const TRIM_SILENCE = 'silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse';
+
 // ---------- Daftar tools per kategori ----------
 // each(file, opts): diproses per file. all(files): semua file jadi satu hasil (hanya tampil kalau file > 1).
 // icon: nama ikon di overlay.html.
@@ -131,6 +216,9 @@ const TOOLS = {
     { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar 90° searah jarum jam', each: (f) => sharpTool(f, 'diputar', (img) => img.rotate(90)) },
     { id: 'gray', icon: 'gray', label: 'Hitam putih', caption: 'Jadikan hitam putih', each: (f) => sharpTool(f, 'hitam putih', (img) => img.grayscale()) },
     { id: 'strip', icon: 'strip', label: 'Metadata', caption: 'Hapus metadata (EXIF, lokasi)', each: (f) => sharpTool(f, 'tanpa metadata', (img) => img) },
+    { id: 'flip', icon: 'flip', label: 'Cermin', caption: 'Balik horizontal (cermin)', each: (f) => sharpTool(f, 'cermin', (img) => img.flop()) },
+    { id: 'trim', icon: 'crop', label: 'Pangkas tepi', caption: 'Buang pinggiran polos di sekeliling', each: (f) => sharpTool(f, 'dipangkas', (img) => img.trim({ threshold: 12 })) },
+    { id: 'square', icon: 'square', label: 'Persegi', caption: 'Potong jadi 1:1 di bagian paling menarik', each: (f) => sharpTool(f, 'persegi', squareCrop) },
     { id: 'merge', icon: 'merge', label: 'Gabung PDF', caption: 'Gabung jadi satu PDF', multi: true, all: mergeImagesToPdf },
   ],
   pdf: [
@@ -138,18 +226,29 @@ const TOOLS = {
     { id: 'split', icon: 'split', label: 'Pisah', caption: 'Pisah per halaman', each: splitPdf },
     { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar semua halaman 90°', each: (f) => pdfTool(f, 'diputar', (doc) => doc.getPages().forEach((p) => p.setRotation(pdfLib().degrees((p.getRotation().angle + 90) % 360)))) },
     { id: 'strip', icon: 'strip', label: 'Metadata', caption: 'Hapus metadata PDF', each: (f) => pdfTool(f, 'tanpa metadata', stripPdfMetadata) },
+    { id: 'number', icon: 'hash', label: 'Nomor hal.', caption: 'Tambah nomor halaman di bawah', each: (f) => pdfTool(f, 'bernomor', numberPages) },
+    { id: 'reverse', icon: 'reverse', label: 'Balik urutan', caption: 'Balik urutan halaman (scan terbalik)', each: reversePdf },
   ],
   video: [
     { id: 'compress', icon: 'compress', label: 'Kompres', caption: 'Kompres video (maks 1080p)', each: (f, o) => video(f, 'dikompres', ['-vf', "scale=-2:'min(ih,1080)'", ...H264_LIGHT, '-movflags', '+faststart'], o) },
     { id: '720p', icon: 'screen', label: '720p', caption: 'Ubah ke 720p', each: (f, o) => video(f, '720p', ['-vf', 'scale=-2:720', ...H264, '-movflags', '+faststart'], o) },
     { id: 'mute', icon: 'mute', label: 'Bisukan', caption: 'Hapus suara', each: (f, o) => video(f, 'tanpa suara', ['-c:v', 'copy', '-an'], o, extOf(f)) },
     { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar 90° searah jarum jam', each: (f, o) => video(f, 'diputar', ['-vf', 'transpose=1', ...H264], o) },
+    { id: 'thumb', icon: 'image', label: 'Thumbnail', caption: 'Ambil gambar dari tengah video', each: videoThumb },
+    { id: 'fast', icon: 'fast', label: '2× cepat', caption: 'Percepat 2 kali', each: (f, o) => video(f, '2x', ['-vf', 'setpts=0.5*PTS', '-af', 'atempo=2', ...H264], faster(o, 2)) },
   ],
   audio: [
     { id: 'compress', icon: 'compress', label: 'Kompres', caption: 'Kompres jadi MP3 128 kbps', each: (f, o) => { const out = suffixed(f, 'dikompres', 'mp3'); return ffmpegTo(f, ['-vn', '-c:a', 'libmp3lame', '-b:a', '128k'], out, o.onProgress).then(() => out); } },
     { id: 'normalize', icon: 'wave', label: 'Normalisasi', caption: 'Samakan volume (loudnorm)', each: (f, o) => audio(f, 'normal', ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11'], o) },
     { id: 'mono', icon: 'mono', label: 'Mono', caption: 'Jadikan mono', each: (f, o) => audio(f, 'mono', ['-ac', '1'], o) },
+    { id: 'denoise', icon: 'denoise', label: 'Kurangi bising', caption: 'Kurangi desis dan bising latar', each: (f, o) => audio(f, 'bersih', ['-af', 'afftdn=nf=-25'], o) },
+    { id: 'trim', icon: 'scissors', label: 'Potong hening', caption: 'Buang hening di awal dan akhir', each: (f, o) => audio(f, 'tanpa hening', ['-af', TRIM_SILENCE], o) },
+    { id: 'fast', icon: 'fast', label: '1,5× cepat', caption: 'Percepat 1,5 kali, nada tetap', each: (f, o) => audio(f, '1,5x', ['-af', 'atempo=1.5'], faster(o, 1.5)) },
+    { id: 'fade', icon: 'fade', label: 'Fade', caption: 'Fade-in dan fade-out di ujung', each: fadeAudio },
   ],
+  document: DOC_TOOLS('Per halaman', 'Simpan tiap halaman jadi PNG'),
+  sheet: DOC_TOOLS('Per halaman', 'Simpan tiap halaman jadi PNG'),
+  slides: DOC_TOOLS('Per slide', 'Simpan tiap slide jadi PNG'),
 };
 
 /**
