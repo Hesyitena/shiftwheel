@@ -56,6 +56,8 @@ Uninstall lewat Settings → Apps. Uninstaller menutup Shiftwheel yang sedang ja
 
 Alurnya: edit kode → coba dengan `npm run dev` → `npm test` → commit dan push → `npm run pasang`.
 
+Kalau `npm run dist` gagal dengan `EBUSY ... app.asar`, berarti ada app Electron lain (editor atau Claude desktop yang sedang membuka folder ini) yang memegang `dist/win-unpacked/resources/app.asar`. Tutup app itu atau hapus `dist/win-unpacked`. `npm run pasang` tidak kena masalah ini karena build di folder sementara.
+
 Setelah mengedit `<style>` atau `<script>` di `overlay.html` atau `hud.html`, perbarui hash CSP dengan `node test/check.js --fix` (kalau lupa, overlay tampil tanpa gaya dan `npm test` gagal).
 
 Kategori dan format tujuan diatur di satu tempat: `CATEGORIES` di `converter.js`. Tools ada di `TOOLS` di `tools.js`, aksi file di `ACTIONS` di `main.js`. Roda dibangun dari ketiganya.
