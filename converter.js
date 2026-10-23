@@ -13,7 +13,7 @@ sharp.cache(false);
 
 // Kategori file: ekstensi sumber dan format tujuan yang tampil di roda konversi
 const CATEGORIES = {
-  image: { name: 'Gambar', exts: ['png', 'jpg', 'webp', 'gif', 'tiff', 'avif', 'bmp', 'heic', 'svg'], targets: ['jpg', 'png', 'webp', 'avif', 'tiff', 'gif', 'bmp', 'pdf'] },
+  image: { name: 'Gambar', exts: ['png', 'jpg', 'webp', 'gif', 'tiff', 'avif', 'bmp', 'heic', 'svg'], targets: ['jpg', 'png', 'webp', 'avif', 'tiff', 'gif', 'bmp', 'pdf', 'txt'] },
   pdf: { name: 'PDF', exts: ['pdf'], targets: ['docx', 'txt', 'jpg', 'png'] },
   document: { name: 'Dokumen', exts: ['doc', 'docx', 'odt', 'rtf', 'txt', 'html'], targets: ['pdf', 'docx', 'odt', 'rtf', 'txt', 'html'] },
   sheet: { name: 'Spreadsheet', exts: ['xls', 'xlsx', 'ods', 'csv'], targets: ['pdf', 'xlsx', 'ods', 'csv'] },
@@ -82,9 +82,9 @@ function uniquePath(dir, base, ext) {
   return candidate;
 }
 
-function run(cmd, args, timeout = 120000) {
+function run(cmd, args, timeout = 120000, env = process.env) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout, env, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         err.stderr = String(stderr || '');
         return reject(err);
@@ -132,6 +132,61 @@ async function withTmpDir(fn) {
 }
 
 const lastLine = (s) => String(s || '').trim().split(/\r?\n/).pop().slice(0, 160);
+
+// ---------- OCR (bawaan Windows, offline) ----------
+
+// OCR Windows hanya tersedia sebagai WinRT API, jadi dipanggil lewat PowerShell 5.1.
+// Input: env SW_OCR = JSON array path gambar. Output: JSON array teks (satu per gambar).
+// Exit 3 = tidak ada bahasa OCR terpasang.
+const OCR_SCRIPT = [
+  "$ErrorActionPreference = 'Stop'",
+  '[Console]::OutputEncoding = [Text.Encoding]::UTF8',
+  'Add-Type -AssemblyName System.Runtime.WindowsRuntime',
+  "$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]",
+  'function Await($op, [Type]$type) { $t = $asTask.MakeGenericMethod($type).Invoke($null, @($op)); $null = $t.Wait(-1); $t.Result }',
+  '$null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]',
+  '$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]',
+  '$null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics, ContentType = WindowsRuntime]',
+  '$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()',
+  'if (-not $engine) { exit 3 }',
+  '$texts = foreach ($path in (ConvertFrom-Json $env:SW_OCR)) {',
+  '  $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($path)) ([Windows.Storage.StorageFile])',
+  '  $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])',
+  '  try {',
+  '    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])',
+  '    $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])',
+  '    $result = Await ($engine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])',
+  "    ($result.Lines | ForEach-Object { $_.Text }) -join \"`n\"",
+  '  } finally { $stream.Dispose() }',
+  '}',
+  'ConvertTo-Json -InputObject @($texts) -Compress',
+].join('\n');
+
+async function ocr(images) {
+  const args = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(OCR_SCRIPT, 'utf16le').toString('base64')];
+  let stdout;
+  try {
+    stdout = await run('powershell.exe', args, 300000, { ...process.env, SW_OCR: JSON.stringify(images) });
+  } catch (err) {
+    if (err.code === 3) {
+      throw new Error('OCR Windows belum punya bahasa. Tambahkan bahasa Inggris (dengan fitur OCR) di Settings > Time & language > Language.');
+    }
+    throw new Error(`OCR Windows gagal membaca gambar. ${lastLine(err.stderr)}`.trim());
+  }
+  return JSON.parse(String(stdout).trim()).map((t) => String(t || '').trim());
+}
+
+// Halaman PDF tanpa lapisan teks (hasil scan/foto): render ke PNG lalu OCR
+async function ocrPdf(input, tmp) {
+  try {
+    await run(findTool('pdftoppm'), ['-png', '-r', '200', input, path.join(tmp, 'ocr')]);
+  } catch (err) {
+    if (err.code === 'ENOENT') throw new Error('PDF ini berisi gambar, bukan teks. Untuk membacanya (OCR) perlu Poppler: winget install oschwartz10612.Poppler');
+    throw new Error('pdftoppm gagal membaca PDF (rusak atau terkunci password).');
+  }
+  const pages = readdir(tmp).filter((f) => f.startsWith('ocr') && f.endsWith('.png')).sort().map((f) => path.join(tmp, f));
+  return (await ocr(pages)).filter(Boolean).join('\n\n');
+}
 
 // ---------- ffmpeg ----------
 
@@ -273,8 +328,10 @@ async function viaLibreOffice(input, out, fmt) {
     const produced = readdir(tmp).find((f) => extOf(f) === ext);
     if (!produced) throw new Error('LibreOffice tidak menghasilkan file. Pastikan file tidak rusak atau terkunci.');
     if (!pdfText) return fs.copyFileSync(path.join(tmp, produced), out);
-    const text = fodtToText(fs.readFileSync(path.join(tmp, produced), 'utf8'));
-    if (!text) throw new Error('PDF tidak berisi teks yang bisa dibaca (mungkin hasil scan).');
+    // PDF tanpa lapisan teks (scan/foto) dibaca dengan OCR.
+    // ponytail: PDF campuran (sebagian halaman scan) hanya mengambil halaman yang punya teks.
+    const text = fodtToText(fs.readFileSync(path.join(tmp, produced), 'utf8')) || await ocrPdf(input, tmp);
+    if (!text) throw new Error('Tidak ada teks yang terbaca di PDF ini, juga lewat OCR.');
     fs.writeFileSync(out, text + '\n');
   });
 }
@@ -316,8 +373,23 @@ async function imagesToPdf(files, out) {
   fs.writeFileSync(out, await doc.save());
 }
 
+async function imageToText(input, out) {
+  await withTmpDir(async (tmp) => {
+    const img = sharp(await sharpInput(input, tmp), { animated: false }).autoOrient();
+    const { width = 0 } = (await img.metadata()).autoOrient || {};
+    // Teks kecil lebih terbaca kalau gambarnya diperbesar; gambar raksasa diperkecil
+    const resize = width && width < 1200 ? { width: width * 2 } : { width: 4000, height: 4000, fit: 'inside', withoutEnlargement: true };
+    const png = path.join(tmp, 'ocr.png');
+    await img.resize(resize).flatten({ background: '#ffffff' }).png().toFile(png);
+    const [text] = await ocr([png]);
+    if (!text) throw new Error('Tidak ada teks yang terbaca di gambar ini.');
+    fs.writeFileSync(out, text + '\n');
+  });
+}
+
 async function convertImage(input, out, fmt) {
   if (fmt === 'pdf') return imagesToPdf([input], out);
+  if (fmt === 'txt') return imageToText(input, out);
   await withTmpDir(async (tmp) => {
     const src = await sharpInput(input, tmp);
     // Animasi GIF/WebP dipertahankan kalau tujuannya juga mendukung animasi

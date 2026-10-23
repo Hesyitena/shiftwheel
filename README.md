@@ -22,7 +22,8 @@ Semua konversi berjalan lokal di PC, tidak ada file yang di-upload. Program bant
 |---|---|---|
 | [LibreOffice](https://www.libreoffice.org/download/) | dokumen, spreadsheet, presentasi, PDF → DOCX/TXT | `winget install TheDocumentFoundation.LibreOffice` |
 | [ffmpeg](https://www.gyan.dev/ffmpeg/builds/) | audio, video, gambar BMP/HEIC | `winget install Gyan.FFmpeg` |
-| [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) | PDF → JPG/PNG | `winget install oschwartz10612.Poppler` |
+| [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) | PDF → JPG/PNG, OCR PDF hasil scan | `winget install oschwartz10612.Poppler` |
+| OCR Windows | gambar → TXT, PDF hasil scan → TXT | bawaan Windows 10/11, aktif kalau ada bahasa dengan fitur OCR (bahasa Inggris sudah cukup untuk teks Indonesia) |
 
 Konversi gambar biasa dan semua tools gambar/PDF tidak butuh program tambahan. Kalau program bantu belum terpasang, notifikasi menyebutkan perintah install-nya.
 
@@ -70,7 +71,7 @@ Ikon: `assets/icon.png` (64×64). `npm run dist` otomatis membuat `build/icon.ic
 
 | Tipe file | Sumber | Tujuan | Lewat |
 |---|---|---|---|
-| Gambar | png, jpg, webp, gif, tiff, avif, bmp, heic, svg | JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF | sharp, pdf-lib (BMP/HEIC lewat ffmpeg) |
+| Gambar | png, jpg, webp, gif, tiff, avif, bmp, heic, svg | JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF, TXT | sharp, pdf-lib, OCR Windows (BMP/HEIC lewat ffmpeg) |
 | PDF | pdf | DOCX, TXT, JPG, PNG | LibreOffice, pdftoppm |
 | Dokumen | doc, docx, odt, rtf, txt, html | PDF, DOCX, ODT, RTF, TXT, HTML | LibreOffice |
 | Spreadsheet | xls, xlsx, ods, csv | PDF, XLSX, ODS, CSV | LibreOffice |
@@ -79,9 +80,10 @@ Ikon: `assets/icon.png` (64×64). `npm run dist` otomatis membuat `build/icon.ic
 | Video | mp4, mov, mkv, webm, avi, wmv, m4v | MP4, MOV, MKV, WEBM, GIF, MP3 | ffmpeg |
 
 - Gambar → JPG: orientasi mengikuti EXIF, transparansi diganti putih, kualitas 92. Animasi GIF ↔ WEBP dipertahankan.
+- Gambar → TXT: teks diambil dengan OCR bawaan Windows, offline. Gambar kecil diperbesar 2× dulu supaya tulisan kecil terbaca. Gambar tanpa tulisan ditolak, tidak membuat file kosong.
 - Gambar → PDF: satu halaman dengan lebar 595 pt (A4), tinggi mengikuti rasio gambar.
 - PDF → JPG/PNG: semua halaman pada 150 DPI. Satu halaman jadi `nama.jpg`; banyak halaman jadi `nama 1.jpg`, `nama 2.jpg`, dst.
-- PDF → TXT: LibreOffice meng-import PDF sebagai frame teks yang diabaikan ekspor TXT biasa, jadi Shiftwheel mengambil teks lewat FODT lalu mengurutkannya sesuai posisi di halaman. Teks biasa hasilnya rapi; tata letak kolom/tabel jadi baris berurutan kiri→kanan. PDF hasil scan (tanpa lapisan teks) ditolak karena tidak ada OCR.
+- PDF → TXT: LibreOffice meng-import PDF sebagai frame teks yang diabaikan ekspor TXT biasa, jadi Shiftwheel mengambil teks lewat FODT lalu mengurutkannya sesuai posisi di halaman. Teks biasa hasilnya rapi; tata letak kolom/tabel jadi baris berurutan kiri→kanan. PDF hasil scan atau foto (tanpa lapisan teks) otomatis dibaca dengan OCR Windows: tiap halaman dirender 200 DPI lalu dikenali, antarhalaman dipisah baris kosong.
 - PDF → DOCX: teks masuk ke text box per baris (perilaku import PDF LibreOffice), jadi bisa dibaca dan diedit tapi tata letaknya tidak mengalir seperti dokumen Word biasa.
 - Video → MP4/MOV/MKV: H.264 + AAC (CRF 20). WEBM: VP9 + Opus. GIF: 12 fps, lebar maks 480 px.
 - File yang sudah berformat tujuan dilewati ("Sudah berformat X").

@@ -7,7 +7,7 @@ const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
 const sharp = require('sharp');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
-const { convert, findSoffice, findTool, fodtToText } = require('../converter');
+const { convert, findSoffice, findTool, fodtToText, imagesToPdf } = require('../converter');
 const { toolTasks } = require('../tools');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shiftwheel-test-'));
@@ -19,6 +19,13 @@ const hasPdftoppm = has('pdftoppm', '-v');
 const noLo = hasSoffice ? null : 'LibreOffice tidak terinstal';
 const noFf = hasFfmpeg ? null : 'ffmpeg tidak terinstal';
 const noPoppler = hasPdftoppm ? null : 'pdftoppm tidak terinstal';
+const hasOcr = spawnSync('powershell.exe', ['-NoProfile', '-Command',
+  '$null = [Windows.Media.Ocr.OcrEngine, Windows.Foundation, ContentType = WindowsRuntime]; if ([Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()) { exit 0 } else { exit 1 }'],
+{ windowsHide: true }).status === 0;
+const noOcr = hasOcr ? null : 'OCR Windows tidak tersedia';
+// Gambar berisi tulisan untuk tes OCR
+const textSvg = (w, h, lines) => Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#fff"/>${
+  lines.map((t, i) => `<text x="40" y="${90 + i * 80}" font-family="Arial" font-size="44" fill="#000">${t}</text>`).join('')}</svg>`);
 
 let passed = 0, failed = 0, skipped = 0;
 async function test(name, fn, skipReason) {
@@ -91,6 +98,21 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
     assert.strictEqual((await sharp(out).metadata()).width, 200);
   }, noFf);
 
+  await test('gambar -> txt (OCR Windows)', async () => {
+    await sharp(textSvg(1000, 220, ['Halo dari Shiftwheel 2026', 'Konversi file &amp; teks: mudah!'])).jpeg().toFile(p('tulisan.jpg'));
+    const out = await convert(p('tulisan.jpg'), 'txt');
+    assert.strictEqual(out, p('tulisan.txt'));
+    assert.strictEqual(fs.readFileSync(out, 'utf8'), 'Halo dari Shiftwheel 2026\nKonversi file & teks: mudah!\n');
+  }, noOcr);
+  await test('gambar kecil tetap terbaca (diperbesar 2x sebelum OCR)', async () => {
+    await sharp(textSvg(1000, 220, ['Tulisan kecil sekali'])).resize(400).png().toFile(p('kecil.png'));
+    assert.match(fs.readFileSync(await convert(p('kecil.png'), 'txt'), 'utf8'), /Tulisan kecil sekali/);
+  }, noOcr);
+  await test('gambar tanpa tulisan -> txt ditolak, tidak ada file kosong', async () => {
+    await rejects(convert(p('gambar.png'), 'txt'), /Tidak ada teks yang terbaca di gambar ini/);
+    assert.ok(!fs.existsSync(p('gambar.txt')));
+  }, noOcr);
+
   // ---------- Dokumen (LibreOffice) ----------
   await test('txt -> pdf', async () => startsWith(await convert(p('catatan.txt'), 'pdf'), PDF), noLo);
   await test('txt -> docx', async () => startsWith(await convert(p('catatan.txt'), 'docx'), ZIP), noLo);
@@ -117,8 +139,15 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
     const out = await convert(p('dokumen.pdf'), 'txt');
     assert.strictEqual(fs.readFileSync(out, 'utf8'), 'Halo dari PDF\nBaris kedua: A & B <C>\nkiri kanan\n\nHalaman dua\n');
   }, noLo);
-  await test('pdf tanpa teks (scan) -> pesan error ramah', () =>
-    rejects(convert(p('gambar.pdf'), 'txt'), /PDF tidak berisi teks/), noLo); // gambar.pdf dari tes png -> pdf
+  await test('pdf hasil scan -> txt (OCR Windows, 2 halaman)', async () => {
+    await sharp(textSvg(900, 200, ['Laporan hasil scan', 'Halaman pertama'])).png().toFile(p('scan1.png'));
+    await sharp(textSvg(900, 200, ['Halaman kedua'])).png().toFile(p('scan2.png'));
+    await imagesToPdf([p('scan1.png'), p('scan2.png')], p('scan.pdf')); // PDF isi gambar saja
+    const text = fs.readFileSync(await convert(p('scan.pdf'), 'txt'), 'utf8');
+    assert.match(text, /Laporan hasil scan\nHalaman pertama\n\nHalaman kedua/);
+  }, noLo || noPoppler || noOcr);
+  await test('pdf tanpa tulisan sama sekali -> pesan error ramah', () =>
+    rejects(convert(p('gambar.pdf'), 'txt'), /Tidak ada teks yang terbaca di PDF ini/), noLo || noPoppler || noOcr); // gambar.pdf dari tes png -> pdf
   await test('pdf -> docx', async () => startsWith(await convert(p('dokumen.pdf'), 'docx'), ZIP), noLo);
   await test('pdf -> jpg (2 halaman jadi "dokumen 1.jpg", "dokumen 2.jpg")', async () => {
     assert.strictEqual(await convert(p('dokumen.pdf'), 'jpg'), p('dokumen 1.jpg'));

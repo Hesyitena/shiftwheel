@@ -308,6 +308,7 @@ function wheelConfig() {
   const conv = (t) => ({ id: `convert:${t}`, label: t.toUpperCase(), caption: `Konversi ke ${t.toUpperCase()}` });
   const convert = { fallback: FALLBACK_TARGETS.map(conv) };
   for (const [cat, c] of Object.entries(CATEGORIES)) convert[cat] = c.targets.map(conv);
+  convert.image.find((i) => i.id === 'convert:txt').caption = 'Ambil teks dari gambar (OCR)';
   const tools = {};
   for (const [cat, list] of Object.entries(TOOLS)) {
     tools[cat] = list.map((t) => ({ id: `tool:${cat}.${t.id}`, label: t.label, caption: t.caption, icon: t.icon, multi: Boolean(t.multi) }));
