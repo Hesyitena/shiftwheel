@@ -139,6 +139,14 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
     await test(`mp4 -> ${fmt}`, async () => check(await convert(p('klip.mp4'), fmt)), noFf);
   }
 
+  await test('progres video dilaporkan (0..1, untuk HUD)', async () => {
+    const seen = [];
+    await convert(p('klip.mp4'), 'mkv', { onProgress: (v) => seen.push(v) });
+    assert.ok(seen.length > 0, 'tidak ada laporan progres');
+    assert.ok(seen.every((v) => v >= 0 && v <= 1), `progres di luar 0..1: ${seen}`);
+    assert.ok(Math.max(...seen) > 0.5, `progres tidak sampai ujung: ${seen}`);
+  }, noFf);
+
   // ---------- Tools ----------
   await test('tool gambar: kompres (lebih kecil, maks 2560 px)', async () => {
     const [out] = await runTool('image.compress', [p('foto.jpg')]);

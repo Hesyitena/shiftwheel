@@ -2,7 +2,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 const sharp = require('sharp');
 const { PDFDocument } = require('pdf-lib');
@@ -131,21 +131,47 @@ const lastLine = (s) => String(s || '').trim().split(/\r?\n/).pop().slice(0, 160
 
 // ---------- ffmpeg ----------
 
-async function ffmpeg(args) {
+async function probeDuration(input) {
   try {
-    // Tanpa timeout: video panjang bisa makan waktu lama
-    await run(findTool('ffmpeg'), ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', ...args], 0);
-  } catch (err) {
-    if (err.code === 'ENOENT') throw new Error('ffmpeg tidak ditemukan. Install dulu: winget install Gyan.FFmpeg');
-    throw new Error(`ffmpeg gagal memproses file. ${lastLine(err.stderr)}`.trim());
+    const out = await run(findTool('ffprobe'), ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', input]);
+    return Number(String(out).trim()) || null;
+  } catch {
+    return null; // tanpa durasi, progres tampil tak tentu
   }
 }
 
+// onProgress(0..1) dipanggil dari laporan -progress ffmpeg kalau durasi input diketahui
+async function ffmpeg(args, onProgress) {
+  const duration = onProgress ? await probeDuration(args[args.indexOf('-i') + 1]) : null;
+  await new Promise((resolve, reject) => {
+    // Tanpa timeout: video panjang bisa makan waktu lama
+    const child = spawn(findTool('ffmpeg'), ['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-progress', 'pipe:1', '-nostats', ...args], { windowsHide: true });
+    let stderr = '';
+    let pending = '';
+    child.stderr.on('data', (d) => { stderr = (stderr + d).slice(-4000); });
+    child.stdout.on('data', (d) => {
+      const lines = (pending + d).split('\n');
+      pending = lines.pop();
+      for (const line of lines) {
+        const m = /^out_time_us=(\d+)/.exec(line);
+        if (m && duration) onProgress(Math.min(1, Number(m[1]) / 1e6 / duration));
+      }
+    });
+    child.on('error', (err) => {
+      reject(err.code === 'ENOENT' ? new Error('ffmpeg tidak ditemukan. Install dulu: winget install Gyan.FFmpeg') : err);
+    });
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg gagal memproses file. ${lastLine(stderr)}`.trim()));
+    });
+  });
+}
+
 // Tulis ke folder tmp dulu supaya file setengah jadi tidak tertinggal kalau gagal
-async function ffmpegTo(input, args, out) {
+async function ffmpegTo(input, args, out, onProgress) {
   await withTmpDir(async (tmp) => {
     const tmpOut = path.join(tmp, `out${path.extname(out)}`);
-    await ffmpeg(['-i', input, ...args, tmpOut]);
+    await ffmpeg(['-i', input, ...args, tmpOut], onProgress);
     fs.copyFileSync(tmpOut, out);
   });
 }
@@ -330,8 +356,8 @@ const CONVERTERS = {
   document: viaLibreOffice,
   sheet: viaLibreOffice,
   slides: viaLibreOffice,
-  audio: (i, o, fmt) => ffmpegTo(i, ['-vn', ...AUDIO_ARGS[fmt]], o),
-  video: (i, o, fmt) => ffmpegTo(i, VIDEO_ARGS[fmt], o),
+  audio: (i, o, fmt, opts) => ffmpegTo(i, ['-vn', ...AUDIO_ARGS[fmt]], o, opts.onProgress),
+  video: (i, o, fmt, opts) => ffmpegTo(i, VIDEO_ARGS[fmt], o, opts.onProgress),
 };
 
 function checkInput(input) {
@@ -345,8 +371,9 @@ function checkInput(input) {
  * Konversi satu file ke format tujuan. Hasil disimpan di folder yang sama.
  * Mengembalikan path hasil (halaman pertama untuk PDF multi-halaman).
  * Error dengan `skipped = true` berarti file dilewati.
+ * opts.onProgress(0..1) dipanggil selama konversi audio/video.
  */
-async function convert(input, fmt) {
+async function convert(input, fmt, opts = {}) {
   fmt = ALIAS[String(fmt || '').toLowerCase()] || String(fmt || '').toLowerCase();
   const allTargets = new Set(Object.values(CATEGORIES).flatMap((c) => c.targets));
   if (!allTargets.has(fmt)) throw new Error(`Format tujuan tidak dikenal: ${fmt}`);
@@ -366,7 +393,7 @@ async function convert(input, fmt) {
   }
 
   const out = uniquePath(path.dirname(input), baseOf(input), fmt);
-  return (await CONVERTERS[cat](input, out, fmt)) || out;
+  return (await CONVERTERS[cat](input, out, fmt, opts)) || out;
 }
 
 module.exports = {

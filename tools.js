@@ -111,52 +111,52 @@ function stripPdfMetadata(doc) {
 
 const H264_LIGHT = ['-c:v', 'libx264', '-preset', 'medium', '-crf', '28', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k'];
 
-function video(file, label, args, ext = 'mp4') {
+function video(file, label, args, opts, ext = 'mp4') {
   const out = suffixed(file, label, ext);
-  return ffmpegTo(file, args, out).then(() => out);
+  return ffmpegTo(file, args, out, opts.onProgress).then(() => out);
 }
 
 // Pakai codec format aslinya kalau ada, selain itu jadi MP3
-function audio(file, label, args) {
-  const ext = AUDIO_ARGS[extOf(file)] ? extOf(file) : 'mp3';
+function audio(file, label, args, opts, ext = AUDIO_ARGS[extOf(file)] ? extOf(file) : 'mp3') {
   const out = suffixed(file, label, ext);
-  return ffmpegTo(file, ['-vn', ...args, ...AUDIO_ARGS[ext]], out).then(() => out);
+  return ffmpegTo(file, ['-vn', ...args, ...AUDIO_ARGS[ext]], out, opts.onProgress).then(() => out);
 }
 
 // ---------- Daftar tools per kategori ----------
-// each: diproses per file. all: semua file jadi satu hasil (hanya tampil kalau file > 1).
+// each(file, opts): diproses per file. all(files): semua file jadi satu hasil (hanya tampil kalau file > 1).
+// icon: nama ikon di overlay.html.
 
 const TOOLS = {
   image: [
-    { id: 'compress', label: 'Kompres', caption: 'Kompres gambar', each: compressImage },
-    { id: 'half', label: '50%', caption: 'Perkecil jadi 50%', each: (f) => sharpTool(f, '50%', (img, m) => img.resize(Math.max(1, Math.round(m.autoOrient.width / 2)))) },
-    { id: 'rotate', label: 'Putar', caption: 'Putar 90° searah jarum jam', each: (f) => sharpTool(f, 'diputar', (img) => img.rotate(90)) },
-    { id: 'gray', label: 'Hitam Putih', caption: 'Jadikan hitam putih', each: (f) => sharpTool(f, 'hitam putih', (img) => img.grayscale()) },
-    { id: 'strip', label: 'Metadata', caption: 'Hapus metadata (EXIF, lokasi)', each: (f) => sharpTool(f, 'tanpa metadata', (img) => img) },
-    { id: 'merge', label: 'Gabung PDF', caption: 'Gabung jadi satu PDF', multi: true, all: mergeImagesToPdf },
+    { id: 'compress', icon: 'compress', label: 'Kompres', caption: 'Kompres gambar', each: compressImage },
+    { id: 'half', icon: 'half', label: '50%', caption: 'Perkecil jadi 50%', each: (f) => sharpTool(f, '50%', (img, m) => img.resize(Math.max(1, Math.round(m.autoOrient.width / 2)))) },
+    { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar 90° searah jarum jam', each: (f) => sharpTool(f, 'diputar', (img) => img.rotate(90)) },
+    { id: 'gray', icon: 'gray', label: 'Hitam putih', caption: 'Jadikan hitam putih', each: (f) => sharpTool(f, 'hitam putih', (img) => img.grayscale()) },
+    { id: 'strip', icon: 'strip', label: 'Metadata', caption: 'Hapus metadata (EXIF, lokasi)', each: (f) => sharpTool(f, 'tanpa metadata', (img) => img) },
+    { id: 'merge', icon: 'merge', label: 'Gabung PDF', caption: 'Gabung jadi satu PDF', multi: true, all: mergeImagesToPdf },
   ],
   pdf: [
-    { id: 'merge', label: 'Gabung', caption: 'Gabung jadi satu PDF', multi: true, all: mergePdfs },
-    { id: 'split', label: 'Pisah', caption: 'Pisah per halaman', each: splitPdf },
-    { id: 'rotate', label: 'Putar', caption: 'Putar semua halaman 90°', each: (f) => pdfTool(f, 'diputar', (doc) => doc.getPages().forEach((p) => p.setRotation(degrees((p.getRotation().angle + 90) % 360)))) },
-    { id: 'strip', label: 'Metadata', caption: 'Hapus metadata PDF', each: (f) => pdfTool(f, 'tanpa metadata', stripPdfMetadata) },
+    { id: 'merge', icon: 'merge', label: 'Gabung', caption: 'Gabung jadi satu PDF', multi: true, all: mergePdfs },
+    { id: 'split', icon: 'split', label: 'Pisah', caption: 'Pisah per halaman', each: splitPdf },
+    { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar semua halaman 90°', each: (f) => pdfTool(f, 'diputar', (doc) => doc.getPages().forEach((p) => p.setRotation(degrees((p.getRotation().angle + 90) % 360)))) },
+    { id: 'strip', icon: 'strip', label: 'Metadata', caption: 'Hapus metadata PDF', each: (f) => pdfTool(f, 'tanpa metadata', stripPdfMetadata) },
   ],
   video: [
-    { id: 'compress', label: 'Kompres', caption: 'Kompres video (maks 1080p)', each: (f) => video(f, 'dikompres', ['-vf', "scale=-2:'min(ih,1080)'", ...H264_LIGHT, '-movflags', '+faststart']) },
-    { id: '720p', label: '720p', caption: 'Ubah ke 720p', each: (f) => video(f, '720p', ['-vf', 'scale=-2:720', ...H264, '-movflags', '+faststart']) },
-    { id: 'mute', label: 'Bisukan', caption: 'Hapus suara', each: (f) => video(f, 'tanpa suara', ['-c:v', 'copy', '-an'], extOf(f)) },
-    { id: 'rotate', label: 'Putar', caption: 'Putar 90° searah jarum jam', each: (f) => video(f, 'diputar', ['-vf', 'transpose=1', ...H264]) },
+    { id: 'compress', icon: 'compress', label: 'Kompres', caption: 'Kompres video (maks 1080p)', each: (f, o) => video(f, 'dikompres', ['-vf', "scale=-2:'min(ih,1080)'", ...H264_LIGHT, '-movflags', '+faststart'], o) },
+    { id: '720p', icon: 'screen', label: '720p', caption: 'Ubah ke 720p', each: (f, o) => video(f, '720p', ['-vf', 'scale=-2:720', ...H264, '-movflags', '+faststart'], o) },
+    { id: 'mute', icon: 'mute', label: 'Bisukan', caption: 'Hapus suara', each: (f, o) => video(f, 'tanpa suara', ['-c:v', 'copy', '-an'], o, extOf(f)) },
+    { id: 'rotate', icon: 'rotate', label: 'Putar', caption: 'Putar 90° searah jarum jam', each: (f, o) => video(f, 'diputar', ['-vf', 'transpose=1', ...H264], o) },
   ],
   audio: [
-    { id: 'compress', label: 'Kompres', caption: 'Kompres jadi MP3 128 kbps', each: (f) => { const out = suffixed(f, 'dikompres', 'mp3'); return ffmpegTo(f, ['-vn', '-c:a', 'libmp3lame', '-b:a', '128k'], out).then(() => out); } },
-    { id: 'normalize', label: 'Normalisasi', caption: 'Samakan volume (loudnorm)', each: (f) => audio(f, 'normal', ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11']) },
-    { id: 'mono', label: 'Mono', caption: 'Jadikan mono', each: (f) => audio(f, 'mono', ['-ac', '1']) },
+    { id: 'compress', icon: 'compress', label: 'Kompres', caption: 'Kompres jadi MP3 128 kbps', each: (f, o) => { const out = suffixed(f, 'dikompres', 'mp3'); return ffmpegTo(f, ['-vn', '-c:a', 'libmp3lame', '-b:a', '128k'], out, o.onProgress).then(() => out); } },
+    { id: 'normalize', icon: 'wave', label: 'Normalisasi', caption: 'Samakan volume (loudnorm)', each: (f, o) => audio(f, 'normal', ['-af', 'loudnorm=I=-16:TP=-1.5:LRA=11'], o) },
+    { id: 'mono', icon: 'mono', label: 'Mono', caption: 'Jadikan mono', each: (f, o) => audio(f, 'mono', ['-ac', '1'], o) },
   ],
 };
 
 /**
  * Ubah satu pilihan tool ("image.compress") + daftar file jadi daftar tugas antrean.
- * Tiap tugas: { name, run: () => Promise<path hasil> }.
+ * Tiap tugas: { name, label, chip, run: (opts) => Promise<path hasil> }.
  */
 function toolTasks(toolId, files) {
   const [cat, id] = String(toolId).split('.');
@@ -167,10 +167,12 @@ function toolTasks(toolId, files) {
     checkInput(f);
     if (categoryOf(f) !== cat) throw new Error(`Tool "${tool.caption}" tidak berlaku untuk file .${extOf(f)}`);
   };
+  const info = { label: tool.caption, chip: tool.label };
 
   if (tool.all) {
     return [{
-      name: tool.caption,
+      ...info,
+      name: `${files.length} file`,
       run: async () => {
         files.forEach(ofCat);
         if (files.length < 2) throw new Error('Pilih minimal 2 file untuk digabung.');
@@ -178,7 +180,7 @@ function toolTasks(toolId, files) {
       },
     }];
   }
-  return files.map((f) => ({ name: path.basename(String(f || '')), run: async () => { ofCat(f); return tool.each(f); } }));
+  return files.map((f) => ({ ...info, name: path.basename(String(f || '')), run: async (opts = {}) => { ofCat(f); return tool.each(f, opts); } }));
 }
 
 module.exports = { TOOLS, toolTasks };
