@@ -20,6 +20,7 @@
       "preload.js",
       "overlay.html",
       "converter.js",
+      "tools.js",
       "assets/**"
     ],
     "asarUnpack": [

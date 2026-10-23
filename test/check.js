@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
-const jsFiles = ['main.js', 'preload.js', 'converter.js', 'scripts/make-ico.js', 'test/converter.test.js', 'test/check.js'];
+const jsFiles = ['main.js', 'preload.js', 'converter.js', 'tools.js', 'scripts/make-ico.js', 'test/converter.test.js', 'test/check.js'];
 let ok = true;
 
 for (const f of jsFiles) {
