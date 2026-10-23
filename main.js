@@ -1,17 +1,31 @@
 // Shiftwheel: proses utama (tray, hook global, overlay radial, antrean konversi)
 const fs = require('fs');
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, Notification, screen, ipcMain, shell, powerMonitor } = require('electron');
+const { execFile, spawn } = require('child_process');
+const { app, BrowserWindow, Tray, Menu, Notification, screen, ipcMain, shell, powerMonitor, clipboard, dialog } = require('electron');
 const { uIOhook, UiohookKey } = require('uiohook-napi');
-const { convert, FORMATS } = require('./converter');
+const { convert, uniquePath, CATEGORIES, FALLBACK_TARGETS } = require('./converter');
+const { TOOLS, toolTasks } = require('./tools');
 
 const APP_ID = 'com.local.shiftwheel'; // harus sama dengan build.appId di package.json
 const ICON = path.join(__dirname, 'assets', 'icon.png');
-const OVERLAY_SIZE = 320;
+const OVERLAY_W = 360;
+const OVERLAY_H = 400;
+const WHEEL_CENTER = 180; // pusat roda di dalam jendela overlay
 const DRAG_THRESHOLD = 20; // piksel fisik
 const HIDE_DELAY = 400; // beri waktu event drop sampai sebelum overlay hilang
 const LINGER_MS = 8000; // mode --convert: tunggu sebentar supaya notifikasi masih bisa diklik
 const LOGIN_ARGS = ['--hidden'];
+
+// Ketuk tombol saat drag untuk membuka roda; ketuk tombol lain untuk ganti roda
+const TRIGGER = {
+  [UiohookKey.Shift]: 'convert',
+  [UiohookKey.ShiftRight]: 'convert',
+  [UiohookKey.Ctrl]: 'tools',
+  [UiohookKey.CtrlRight]: 'tools',
+  [UiohookKey.Alt]: 'actions',
+  [UiohookKey.AltRight]: 'actions',
+};
 
 // Saat dev (npm start) belum ada shortcut Start Menu dengan AUMID ini, jadi toast
 // diarahkan ke electron.exe supaya tetap muncul. Versi terinstal memakai APP_ID.
@@ -75,7 +89,7 @@ function notify(body, onClick) {
   n.show();
 }
 
-// ---------- Antrean konversi (sequential) ----------
+// ---------- Antrean (sequential) untuk konversi dan tools ----------
 
 let queue = Promise.resolve();
 let pending = 0;
@@ -86,21 +100,33 @@ function newBatch() {
   return { ok: 0, fail: 0, skip: 0, lastOut: null, note: null };
 }
 
-function enqueue(files, fmt) {
+function updateProgress() {
+  if (tray) tray.setToolTip(pending ? `Shiftwheel: memproses ${pending} file...` : 'Shiftwheel');
+}
+
+// task: { name, run: () => Promise<path hasil> }
+function enqueueTasks(tasks) {
   clearTimeout(quitTimer);
-  for (const file of files) {
+  for (const task of tasks) {
     pending++;
     queue = queue.then(async () => {
+      updateProgress();
       try {
-        batch.lastOut = await convert(file, fmt);
+        batch.lastOut = await task.run();
         batch.ok++;
       } catch (err) {
-        err.skipped ? batch.skip++ : batch.fail++;
-        batch.note = batch.note || `${path.basename(String(file || ''))}: ${err.message}`;
+        if (err.skipped) batch.skip++;
+        else batch.fail++;
+        batch.note = batch.note || `${task.name}: ${err.message}`;
       }
       if (--pending === 0) finishBatch();
+      updateProgress();
     });
   }
+}
+
+function enqueue(files, fmt) {
+  enqueueTasks(files.map((f) => ({ name: path.basename(String(f || '')), run: () => convert(f, fmt) })));
 }
 
 function finishBatch() {
@@ -115,6 +141,109 @@ function finishBatch() {
   if (convertOnly) quitTimer = setTimeout(() => { if (pending === 0) app.quit(); }, LINGER_MS);
 }
 
+// ---------- Aksi file (roda Alt) ----------
+
+const count = (paths) => (paths.length === 1 ? `"${path.basename(paths[0])}"` : `${paths.length} item`);
+const psQuote = (s) => `'${s.replace(/'/g, "''")}'`;
+
+// Electron tidak bisa menaruh file (CF_HDROP) ke clipboard; PowerShell 5.1 bisa
+function copyFilesToClipboard(paths) {
+  const script = `Set-Clipboard -LiteralPath ${paths.map(psQuote).join(',')}`;
+  const args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')];
+  return new Promise((resolve, reject) => {
+    execFile('powershell.exe', args, { windowsHide: true }, (err) => (err ? reject(new Error('Gagal menyalin file ke clipboard.')) : resolve()));
+  });
+}
+
+async function transfer(paths, move) {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title: move ? 'Pindahkan ke folder' : 'Salin ke folder',
+    properties: ['openDirectory', 'createDirectory'],
+  });
+  if (canceled || !filePaths[0]) return null;
+  const dir = filePaths[0];
+  let last = null;
+  for (const src of paths) {
+    if (move && path.dirname(src) === dir) continue;
+    const isFile = fs.statSync(src).isFile();
+    const ext = isFile ? path.extname(src).slice(1) : '';
+    const dest = uniquePath(dir, isFile ? path.basename(src, path.extname(src)) : path.basename(src), ext);
+    if (move) {
+      try {
+        fs.renameSync(src, dest);
+      } catch (err) {
+        if (err.code !== 'EXDEV') throw err;
+        fs.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false }); // beda drive: salin lalu hapus
+        fs.rmSync(src, { recursive: true });
+      }
+    } else {
+      fs.cpSync(src, dest, { recursive: true, errorOnExist: true, force: false });
+    }
+    last = dest;
+  }
+  return { msg: `${count(paths)} ${move ? 'dipindah' : 'disalin'} ke ${dir}`, reveal: last };
+}
+
+function openTerminal(paths) {
+  const p = paths[0];
+  const dir = fs.statSync(p).isDirectory() ? p : path.dirname(p);
+  const term = spawn('wt.exe', ['-d', dir], { detached: true, stdio: 'ignore' });
+  term.on('error', () => spawn('cmd.exe', ['/K'], { cwd: dir, detached: true, stdio: 'ignore' }).unref()); // tanpa Windows Terminal
+  term.unref();
+}
+
+const ACTIONS = [
+  { id: 'copy-path', label: 'Salin Path', caption: 'Salin path lengkap', run: (p) => { clipboard.writeText(p.join('\r\n')); return { msg: `Path ${count(p)} disalin` }; } },
+  { id: 'copy', label: 'Salin', caption: 'Salin ke clipboard (siap paste)', run: async (p) => { await copyFilesToClipboard(p); return { msg: `${count(p)} disalin ke clipboard` }; } },
+  { id: 'copy-to', label: 'Salin Ke', caption: 'Salin ke folder lain...', run: (p) => transfer(p, false) },
+  { id: 'move-to', label: 'Pindah Ke', caption: 'Pindahkan ke folder lain...', run: (p) => transfer(p, true) },
+  { id: 'terminal', label: 'Terminal', caption: 'Buka folder di Terminal', run: openTerminal },
+  { id: 'reveal', label: 'Explorer', caption: 'Tampilkan di Explorer', run: (p) => shell.showItemInFolder(p[0]) },
+];
+
+async function runAction(id, paths) {
+  const action = ACTIONS.find((a) => a.id === id);
+  if (!action) return;
+  try {
+    const existing = paths.filter((p) => fs.existsSync(p));
+    if (!existing.length) throw new Error('File tidak ditemukan.');
+    const result = await action.run(existing);
+    if (result) notify(result.msg, result.reveal ? () => shell.showItemInFolder(result.reveal) : null);
+  } catch (err) {
+    notify(`${action.caption} gagal: ${err.message}`);
+  }
+}
+
+// ---------- Isi roda (dikirim ke overlay) ----------
+
+function wheelConfig() {
+  const conv = (t) => ({ id: `convert:${t}`, label: t.toUpperCase(), caption: `Konversi ke ${t.toUpperCase()}` });
+  const convert = { fallback: FALLBACK_TARGETS.map(conv) };
+  for (const [cat, c] of Object.entries(CATEGORIES)) convert[cat] = c.targets.map(conv);
+  const tools = {};
+  for (const [cat, list] of Object.entries(TOOLS)) {
+    tools[cat] = list.map((t) => ({ id: `tool:${cat}.${t.id}`, label: t.label, caption: t.caption, multi: Boolean(t.multi) }));
+  }
+  const actions = ACTIONS.map((a) => ({ id: `action:${a.id}`, label: a.label, caption: a.caption }));
+  return { convert, tools, actions };
+}
+
+ipcMain.on('overlay:drop', (e, msg) => {
+  if (!overlay || e.sender !== overlay.webContents) return;
+  const id = msg && typeof msg.id === 'string' ? msg.id : '';
+  const paths = Array.isArray(msg && msg.paths) ? msg.paths.filter((p) => typeof p === 'string' && p) : [];
+  if (!id || paths.length === 0) return; // drop di tengah / luar segmen = batal
+
+  const sep = id.indexOf(':');
+  const kind = id.slice(0, sep);
+  const value = id.slice(sep + 1);
+  if (kind === 'convert') enqueue(paths, value);
+  else if (kind === 'action') runAction(value, paths);
+  else if (kind === 'tool') {
+    try { enqueueTasks(toolTasks(value, paths)); } catch (err) { notify(err.message); }
+  }
+});
+
 // ---------- Overlay ----------
 
 let shown = false;
@@ -122,8 +251,8 @@ let hideTimer = null;
 
 function createOverlay() {
   overlay = new BrowserWindow({
-    width: OVERLAY_SIZE,
-    height: OVERLAY_SIZE,
+    width: OVERLAY_W,
+    height: OVERLAY_H,
     show: false,
     frame: false,
     transparent: true,
@@ -147,63 +276,61 @@ function createOverlay() {
   });
   overlay.setAlwaysOnTop(true, 'screen-saver');
   overlay.loadFile(path.join(__dirname, 'overlay.html'));
+  overlay.webContents.on('did-finish-load', () => overlay.webContents.send('overlay:config', wheelConfig()));
   overlay.webContents.on('will-navigate', (e) => e.preventDefault());
   overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   overlay.on('session-end', stopHook); // logoff / shutdown Windows
 }
 
-function showOverlay(physX, physY) {
-  clearTimeout(hideTimer);
+function placeOverlay(physX, physY) {
   // uiohook memberi piksel fisik; window butuh DIP (penting di scaling selain 100%)
   const p = screen.screenToDipPoint({ x: physX, y: physY });
   const wa = screen.getDisplayNearestPoint(p).workArea;
   const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
-  const x = clamp(Math.round(p.x - OVERLAY_SIZE / 2), wa.x, wa.x + wa.width - OVERLAY_SIZE);
-  const y = clamp(Math.round(p.y - OVERLAY_SIZE / 2), wa.y, wa.y + wa.height - OVERLAY_SIZE);
-  overlay.setBounds({ x, y, width: OVERLAY_SIZE, height: OVERLAY_SIZE });
-  overlay.showInactive();
-  overlay.webContents.send('overlay:show');
+  const x = clamp(Math.round(p.x - WHEEL_CENTER), wa.x, wa.x + wa.width - OVERLAY_W);
+  const y = clamp(Math.round(p.y - WHEEL_CENTER), wa.y, wa.y + wa.height - OVERLAY_H);
+  overlay.setBounds({ x, y, width: OVERLAY_W, height: OVERLAY_H });
+}
+
+function openWheel(mode) {
+  const fresh = !shown;
+  clearTimeout(hideTimer);
+  if (fresh) placeOverlay(drag.x, drag.y);
+  overlay.webContents.send('overlay:show', { mode, fresh });
+  if (fresh) overlay.showInactive();
   shown = true;
 }
 
 function scheduleHide() {
   if (!shown) return;
-  shown = false; // boleh muncul lagi kalau Shift ditekan ulang sebelum timer jalan
+  shown = false;
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => overlay && overlay.hide(), HIDE_DELAY);
 }
 
-ipcMain.on('overlay:drop', (e, msg) => {
-  if (!overlay || e.sender !== overlay.webContents) return;
-  const fmt = msg && msg.fmt;
-  const paths = Array.isArray(msg && msg.paths) ? msg.paths.filter((p) => typeof p === 'string' && p) : [];
-  if (!FORMATS.includes(fmt) || paths.length === 0) return; // drop di tengah / luar segmen = batal
-  enqueue(paths, fmt);
-});
-
-// ---------- Hook global (uiohook) ----------
-// Heuristik "file sedang di-drag": tombol kiri ditahan + gerak > 20 px + Shift.
-
-const drag = { down: false, moved: false, shift: false, x0: 0, y0: 0, x: 0, y: 0 };
-let hookRunning = false;
-
-const isShiftKey = (e) => e.keycode === UiohookKey.Shift || e.keycode === UiohookKey.ShiftRight;
-
-function maybeShow() {
-  if (enabled && !shown && drag.down && drag.moved && drag.shift) showOverlay(drag.x, drag.y);
+function hideNow() {
+  shown = false;
+  clearTimeout(hideTimer);
+  if (overlay) overlay.hide();
 }
 
+// ---------- Hook global (uiohook) ----------
+// Heuristik "file sedang di-drag": tombol kiri ditahan + gerak > 20 px. Roda terbuka saat
+// Shift/Ctrl/Alt diketuk selama drag dan tetap terbuka sampai mouse dilepas (atau Esc).
+
+const drag = { down: false, moved: false, x0: 0, y0: 0, x: 0, y: 0 };
+const held = new Set(); // abaikan auto-repeat saat tombol ditahan
+let hookRunning = false;
+
 uIOhook.on('keydown', (e) => {
-  if (!isShiftKey(e)) return;
-  drag.shift = true;
-  maybeShow();
+  if (e.keycode === UiohookKey.Escape) return hideNow();
+  const mode = TRIGGER[e.keycode];
+  if (!mode || held.has(e.keycode)) return;
+  held.add(e.keycode);
+  if (enabled && drag.down && drag.moved) openWheel(mode);
 });
 
-uIOhook.on('keyup', (e) => {
-  if (!isShiftKey(e)) return;
-  drag.shift = false;
-  scheduleHide();
-});
+uIOhook.on('keyup', (e) => held.delete(e.keycode));
 
 uIOhook.on('mousedown', (e) => {
   if (e.button !== 1) return;
@@ -215,7 +342,6 @@ uIOhook.on('mousemove', (e) => {
   drag.x = e.x;
   drag.y = e.y;
   if (!drag.moved && Math.hypot(e.x - drag.x0, e.y - drag.y0) > DRAG_THRESHOLD) drag.moved = true;
-  maybeShow();
 });
 
 uIOhook.on('mouseup', (e) => {
@@ -238,8 +364,9 @@ function stopHook() {
   if (!hookRunning) return;
   try { uIOhook.stop(); } catch { /* sudah berhenti */ }
   hookRunning = false;
-  Object.assign(drag, { down: false, moved: false, shift: false });
-  scheduleHide();
+  held.clear();
+  Object.assign(drag, { down: false, moved: false });
+  hideNow();
 }
 
 // ---------- Tray ----------
@@ -269,7 +396,7 @@ function buildMenu() {
 
 function createTray() {
   tray = new Tray(ICON);
-  tray.setToolTip('Shiftwheel');
+  updateProgress();
   // Menu dibangun ulang tiap dibuka supaya status autostart selalu sesuai registry
   const open = () => tray.popUpContextMenu(buildMenu());
   tray.on('click', open);
@@ -296,7 +423,7 @@ function startBackground() {
   powerMonitor.on('suspend', stopHook);
   powerMonitor.on('resume', () => { stopHook(); startHook(); }); // hook bisa mati setelah sleep
 
-  if (firstRun && !hidden) notify('Shiftwheel berjalan di tray. Drag file + tahan Shift.');
+  if (firstRun && !hidden) notify('Shiftwheel berjalan di tray. Drag file lalu ketuk Shift (konversi), Ctrl (tools), atau Alt (aksi).');
 }
 
 // ---------- Single instance ----------

@@ -2,7 +2,8 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('shiftwheel', {
-  onShow: (cb) => ipcRenderer.on('overlay:show', () => cb()),
+  onConfig: (cb) => ipcRenderer.on('overlay:config', (_e, config) => cb(config)),
+  onShow: (cb) => ipcRenderer.on('overlay:show', (_e, payload) => cb(payload)),
 });
 
 // Wajib paksa 'copy': Shift saat drag berarti "move" di Explorer,
@@ -15,8 +16,8 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = 'copy';
-  const seg = e.target.closest ? e.target.closest('[data-fmt]') : null;
+  const seg = e.target.closest ? e.target.closest('[data-id]') : null;
   const paths = [...e.dataTransfer.files].map((f) => webUtils.getPathForFile(f)).filter(Boolean);
-  // fmt null = drop di tengah / di luar segmen = batal
-  ipcRenderer.send('overlay:drop', { fmt: seg ? seg.dataset.fmt : null, paths });
+  // id null = drop di tengah / di luar segmen = batal
+  ipcRenderer.send('overlay:drop', { id: seg ? seg.dataset.id : null, paths });
 });
