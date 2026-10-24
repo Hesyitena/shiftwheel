@@ -73,7 +73,7 @@ Measured idle footprint of the installed app: ~75 MB of private RAM across 3 pro
 
 The loop: edit code → try it with `npm run dev` → `npm test` → commit and push → `npm run install-local`.
 
-If `npm run dist` fails with `EBUSY ... app.asar`, another Electron app (an editor, or Claude desktop with this folder open) is holding `dist/win-unpacked/resources/app.asar`. Close that app or delete `dist/win-unpacked`. `npm run install-local` doesn't hit this because it builds in a temp folder.
+If `npm run dist` fails with `EBUSY ... app.asar`, another Electron app (an editor, or Claude desktop with this folder open) is holding `dist/win-unpacked/resources/app.asar`. Close that app or delete `dist/win-unpacked`. `npm run install-local` doesn't hit this because it builds into a fresh `dist/install-<time>` folder each run.
 
 Run `npm run install-local` from a regular Windows terminal (Windows Terminal, PowerShell, cmd), **not** from a terminal inside the Claude desktop app. Processes started inside Claude desktop are virtualized (MSIX): writes to `%LOCALAPPDATA%`/`%APPDATA%` are redirected to Claude's private folder, so Shiftwheel would be installed somewhere Windows can't see.
 
