@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-ErDFWOMfinDJrvrIzXP3bbZbf2HfQGnbh/xii5G7moc='; style-src 'sha256-RA5ReUh0c+OrPwIjG+kgSrmiuoHGdQHJg+ItFJ4RnDA='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-/DAeljfU72VXdlu/poRaUHHoHxxSi5VU9u8lr8Xbvxw='; style-src 'sha256-9AzK6IJug1sVEaekwt0q/cYxrCKq61roBLStNBu325o='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -20,6 +20,7 @@
   html, body { margin: 0; width: 360px; height: 380px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
   body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
   #stage { position: absolute; inset: 0; transform-origin: 180px 180px; }
+  #stage.probing { opacity: 0; pointer-events: none; }
   #stage.pop { animation: pop 120ms ease-out backwards; }
   #stage.closing { animation: out 100ms ease-in forwards; }
   @keyframes pop { from { transform: scale(.96); opacity: 0; } }
@@ -192,6 +193,7 @@
   const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
   const state = { config: null, mode: 'convert', category: null, count: 0 };
   let hover = null; // highlighted segment, or the center hole (cancel)
+  let revealed = false; // stays hidden until Windows OLE confirms files are being dragged
   let dropped = false;
   let closeTimer = null;
   let emptyText = '';
@@ -298,16 +300,29 @@
     paintCenter();
   }
 
-  document.addEventListener('dragover', (e) => {
+  function onFileDrag(e) {
+    const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
+    if (!types.includes('Files')) return;
     if (state.category === null) {
-      const files = [...e.dataTransfer.items].filter((i) => i.kind === 'file');
-      state.count = files.length;
+      const files = [...(e.dataTransfer.items || [])].filter((i) => i.kind === 'file');
+      state.count = files.length || 1;
       state.category = categoryOf(files.map((i) => i.type));
       render();
     }
+    if (!revealed) {
+      revealed = true;
+      stage.classList.remove('probing', 'pop');
+      void stage.offsetWidth; // restart the animation
+      stage.classList.add('pop');
+      play('open');
+      render();
+      window.shiftwheel.revealed();
+    }
     // The whole sector is the hit area, not just the text/highlight
     setHover(segmentAt(e.clientX, e.clientY));
-  });
+  }
+  document.addEventListener('dragenter', onFileDrag);
+  document.addEventListener('dragover', onFileDrag);
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) setHover(null); });
   document.addEventListener('drop', () => {
     clearTimeout(closeTimer);
@@ -330,20 +345,22 @@
   window.shiftwheel.onSettings((s) => { sound.on = s.sound; });
   window.shiftwheel.onSound(play);
 
-  // The wheel appears (fresh) or switches mode because another key was tapped
+  // The wheel probes silently on fresh open until dragenter/dragover confirms a file drag
   window.shiftwheel.onShow(({ mode, fresh }) => {
     state.mode = mode;
     dropped = false;
     clearTimeout(closeTimer);
     stage.classList.remove('closing');
     if (fresh) {
+      revealed = false;
       state.category = null;
       state.count = 0;
       stage.classList.remove('pop');
-      void stage.offsetWidth; // restart the animation
-      stage.classList.add('pop');
+      stage.classList.add('probing');
+      render();
+      return;
     }
-    play(fresh ? 'open' : 'switch');
+    if (revealed) play('switch');
     render();
   });
 
@@ -351,6 +368,7 @@
   // uiohook's mouseup arrives slightly before Windows delivers the DOM drop event,
   // so if a segment/hole is hovered we wait briefly for drop before falling back to 'close'.
   window.shiftwheel.onClose(() => {
+    if (!revealed) return;
     stage.classList.add('closing');
     if (dropped) return;
     if (!hover) {

@@ -339,7 +339,7 @@ function wheelConfig() {
 
 ipcMain.on('overlay:drop', (e, msg) => {
   if (!overlay || e.sender !== overlay.webContents) return;
-  Object.assign(drag, { down: false, moved: false, pending: null, preTap: null });
+  Object.assign(drag, { down: false, moved: false, notFile: false, pending: null, preTap: null });
   stopPending();
   scheduleHide();
   const id = msg && typeof msg.id === 'string' ? msg.id : '';
@@ -423,8 +423,18 @@ ipcMain.on('crop:done', (e, rect) => {
 // ---------- Overlay ----------
 
 let shown = false;
+let revealed = false;
 let shownMode = null;
 let hideTimer = null;
+let probeTimer = null;
+let probeMoves = 0;
+
+ipcMain.on('overlay:revealed', (e) => {
+  if (!overlay || e.sender !== overlay.webContents) return;
+  revealed = true;
+  clearTimeout(probeTimer);
+  probeTimer = null;
+});
 
 function createOverlay() {
   overlay = floatingWindow(OVERLAY_W, OVERLAY_H);
@@ -445,6 +455,7 @@ function placeOverlay(p) {
 }
 
 function openWheel(mode, cursor) {
+  if (drag.notFile) return;
   const c = cursor || screen.getCursorScreenPoint();
   const b = overlay.getBounds();
   const outside = shown && Math.hypot(c.x - (b.x + WHEEL_CENTER), c.y - (b.y + WHEEL_CENTER)) > WHEEL_RADIUS;
@@ -452,7 +463,13 @@ function openWheel(mode, cursor) {
   if (!fresh && mode === shownMode) return; // same wheel already open under the cursor
   shownMode = mode;
   clearTimeout(hideTimer);
-  if (fresh) placeOverlay(c);
+  clearTimeout(probeTimer);
+  probeTimer = null;
+  if (fresh) {
+    revealed = false;
+    probeMoves = 0;
+    placeOverlay(c);
+  }
   overlay.setIgnoreMouseEvents(false);
   overlay.webContents.send('overlay:show', { mode, fresh });
   if (fresh) {
@@ -465,8 +482,12 @@ function openWheel(mode, cursor) {
 
 function scheduleHide() {
   if (!shown) return;
+  if (!revealed) return hideNow();
   shown = false;
+  revealed = false;
   clearTimeout(hideTimer);
+  clearTimeout(probeTimer);
+  probeTimer = null;
   overlay.webContents.send('overlay:close'); // fade-out animation
   hideTimer = setTimeout(() => overlay && overlay.hide(), HIDE_DELAY);
 }
@@ -478,7 +499,10 @@ function playSound(name) {
 
 function hideNow() {
   shown = false;
+  revealed = false;
   clearTimeout(hideTimer);
+  clearTimeout(probeTimer);
+  probeTimer = null;
   if (overlay) {
     overlay.setIgnoreMouseEvents(true);
     overlay.hide();
@@ -490,7 +514,7 @@ function hideNow() {
 // at any point during the drag. Once moved, drag.moved stays true even if the cursor returns near
 // the click point. The wheel stays open until the mouse is released (or Esc).
 
-const drag = { down: false, moved: false, x0: 0, y0: 0, pending: null, preTap: null, lastMove: 0 };
+const drag = { down: false, moved: false, notFile: false, x0: 0, y0: 0, pending: null, preTap: null, lastMove: 0 };
 const prevMods = { shift: false, ctrl: false, alt: false };
 const taps = createTaps(TRIGGER); // tap detection that survives lost keyups (see hotkeys.js)
 let hookRunning = false;
@@ -583,7 +607,7 @@ uIOhook.on('mousedown', (e) => {
   if (!e.ctrlKey) taps.up(UiohookKey.Ctrl);
   if (!e.altKey) taps.up(UiohookKey.Alt);
   const preTap = drag.preTap && now - drag.preTap.time < 300 ? drag.preTap : null;
-  Object.assign(drag, { down: true, moved: false, x0: p.x, y0: p.y, pending: null, preTap, lastMove: now });
+  Object.assign(drag, { down: true, moved: false, notFile: false, x0: p.x, y0: p.y, pending: null, preTap, lastMove: now });
 });
 
 uIOhook.on('mousemove', (e) => {
@@ -596,6 +620,15 @@ uIOhook.on('mousemove', (e) => {
   drag.lastMove = now;
   const c = screen.getCursorScreenPoint();
   lastHookCursor = c;
+  if (shown && !revealed && ++probeMoves >= 3 && !probeTimer) {
+    probeTimer = setTimeout(() => {
+      probeTimer = null;
+      if (shown && !revealed) {
+        drag.notFile = true;
+        hideNow();
+      }
+    }, 120);
+  }
   if (!drag.moved && dragDistance(c) >= DRAG_THRESHOLD) {
     drag.moved = true;
     if (drag.pending) {
@@ -620,7 +653,7 @@ uIOhook.on('mouseup', (e) => {
   lastHookCursor = screen.getCursorScreenPoint();
   syncMods(e);
   if (e.button !== 1 && e.button !== 2) return;
-  Object.assign(drag, { down: false, moved: false, pending: null, preTap: null });
+  Object.assign(drag, { down: false, moved: false, notFile: false, pending: null, preTap: null });
   stopPending();
   scheduleHide();
 });
@@ -641,7 +674,7 @@ function stopHook() {
   hookRunning = false;
   taps.reset();
   stopPending();
-  Object.assign(drag, { down: false, moved: false, pending: null, preTap: null });
+  Object.assign(drag, { down: false, moved: false, notFile: false, pending: null, preTap: null });
   hideNow();
 }
 

@@ -194,7 +194,7 @@ Shiftwheel is engineered to stay in the background all day with minimal overhead
 
 ## Notes & Behavior Details
 
-- **Drag Detection**: Because Windows does not expose a global event for "an Explorer file drag started", Shiftwheel detects when a mouse button is held, the cursor moves at least 4 DIP (matching Explorer's drag threshold), and you tap **Shift**, **Ctrl**, or **Alt**.
+- **Smart File-Drag Probe**: When a mouse drag + **Shift**/**Ctrl**/**Alt** tap is detected, the overlay probes silently (`opacity: 0`) and only reveals the wheel and plays the open sound once Windows OLE (`dragenter`/`dragover`) confirms actual files (`Files`) are being dragged. Selecting text, dragging windows/sliders, or clicking while holding Shift outside a file drag will not trigger the wheel.
 - **Modifier Hold vs. Tap**: Holding `Ctrl` or `Shift` *before* starting a drag (standard Explorer copy/move behavior) will not trigger the wheel unless you tap the key cleanly or press it during the drag.
 - **Resilient Key Tracking**: Windows occasionally drops `keyup` events (e.g. pressing Left Shift and releasing Right Shift, or `Alt+Tab`). Shiftwheel's state machine in `hotkeys.js` automatically recovers from lost key-ups and self-heals the global hook after sleep or screen lock.
 - **Administrator Windows**: Due to Windows UIPI security restrictions, a non-elevated tray app cannot receive input hooks while the cursor is hovering over a window running as Administrator.
