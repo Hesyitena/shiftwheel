@@ -1,6 +1,6 @@
 # Shiftwheel
 
-A [Tangerine](https://tangerineformac.com/)-style file converter for Windows 11. Start dragging a file in Explorer, **tap** a key, and a wheel opens around the cursor. It stays open until you drop the file:
+A radial drag-and-drop file converter and toolkit for Windows 11. Start dragging a file in Explorer, **tap** a key, and a wheel opens around the cursor. It stays open until you drop the file:
 
 | Tap while dragging | Wheel | Examples |
 |---|---|---|
