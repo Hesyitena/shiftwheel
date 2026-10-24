@@ -504,6 +504,7 @@ function hideNow() {
   clearTimeout(probeTimer);
   probeTimer = null;
   if (overlay) {
+    overlay.webContents.send('overlay:close');
     overlay.setIgnoreMouseEvents(true);
     overlay.hide();
   }
@@ -620,14 +621,14 @@ uIOhook.on('mousemove', (e) => {
   drag.lastMove = now;
   const c = screen.getCursorScreenPoint();
   lastHookCursor = c;
-  if (shown && !revealed && ++probeMoves >= 3 && !probeTimer) {
+  if (shown && !revealed && ++probeMoves >= 2 && !probeTimer) {
     probeTimer = setTimeout(() => {
       probeTimer = null;
       if (shown && !revealed) {
         drag.notFile = true;
         hideNow();
       }
-    }, 120);
+    }, 65);
   }
   if (!drag.moved && dragDistance(c) >= DRAG_THRESHOLD) {
     drag.moved = true;
