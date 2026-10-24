@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('shiftwheel', {
   onSound: on('overlay:sound'),
   onHud: on('hud:update'),
   onHudHide: on('hud:hide'),
+  onCropInit: on('crop:init'),
+  cropDone: (rect) => ipcRenderer.send('crop:done', rect),
 });
 
 // Always force 'copy': Shift while dragging means "move" in Explorer,

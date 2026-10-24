@@ -68,7 +68,7 @@ Measured idle footprint of the installed app: ~75 MB of private RAM across 3 pro
 |---|---|
 | `npm run dev` | Try changes right away. Shiftwheel runs from source and **restarts itself every time an app file is saved**. The installed version is closed first (they can't run side by side); reopen it from the Start Menu when you're done. Stop with Ctrl+C or **Quit** in the tray menu. |
 | `npm run install-local` | The changes are good and you want to use them every day. Builds the installer and installs it silently on this PC (~1 minute). The old version is closed, the new one starts in the tray, settings are kept. |
-| `npm test` | `node --check`, CSP hash check, and the converter/tools tests. Tests that need LibreOffice/ffmpeg/Poppler/OCR are skipped when the program isn't there. |
+| `npm test` | `node --check`, CSP hash check, the key-tap tests, and the converter/tools tests. Tests that need LibreOffice/ffmpeg/Poppler/OCR are skipped when the program isn't there. |
 | `npm run dist` | Only builds the installer in `dist/` (for example to install on another PC). |
 
 The loop: edit code → try it with `npm run dev` → `npm test` → commit and push → `npm run install-local`.
@@ -77,7 +77,7 @@ If `npm run dist` fails with `EBUSY ... app.asar`, another Electron app (an edit
 
 Run `npm run install-local` from a regular Windows terminal (Windows Terminal, PowerShell, cmd), **not** from a terminal inside the Claude desktop app. Processes started inside Claude desktop are virtualized (MSIX): writes to `%LOCALAPPDATA%`/`%APPDATA%` are redirected to Claude's private folder, so Shiftwheel would be installed somewhere Windows can't see.
 
-After editing the `<style>` or `<script>` in `overlay.html` or `hud.html`, update the CSP hashes with `node test/check.js --fix` (if you forget, the overlay renders unstyled and `npm test` fails).
+After editing the `<style>` or `<script>` in `overlay.html`, `hud.html`, or `crop.html`, update the CSP hashes with `node test/check.js --fix` (if you forget, the overlay renders unstyled and `npm test` fails).
 
 Categories and target formats live in one place: `CATEGORIES` in `converter.js`. Tools are in `TOOLS` in `tools.js`, file actions in `ACTIONS` in `main.js`. The wheels are built from those three.
 
@@ -111,7 +111,7 @@ Results are saved as new files, for example `photo (compressed).jpg`. The origin
 
 | File type | Tools |
 |---|---|
-| Images | **Compress** (max 2560 px, quality ~75; skipped if the result isn't smaller), **50%**, **Rotate** 90°, **Grayscale**, **Metadata** (remove EXIF/location), **Mirror**, **Trim edges** (cut away plain borders), **Square** 1:1 (smart crop around the most salient part), **Merge PDF** (2+ images into `Merged.pdf`) |
+| Images | **Compress** (max 2560 px, quality ~75; skipped if the result isn't smaller), **50%**, **Rotate** 90°, **Grayscale**, **Metadata** (remove EXIF/location), **Mirror**, **Crop** (opens an editor: drag a selection, pick Free/1:1/4:3/3:2/16:9/9:16, Enter to save; with several images the same crop is applied to all), **Trim edges** (cut away plain borders; skipped when there are none), **Square** 1:1 (smart crop around the most salient part), **Merge PDF** (2+ images into `Merged.pdf`) |
 | PDF | **Merge** (2+ PDFs into `Merged.pdf`), **Split** into pages (`name page 1.pdf`, …), **Rotate** every page 90°, **Metadata** (remove title/author/XMP), **Page numbers** ("1 / 5" at the bottom of each page), **Reverse** page order |
 | Video | **Compress** (max 1080p, CRF 28), **720p**, **Mute**, **Rotate** 90°, **Thumbnail** (JPG from the middle of the video), **2× speed** |
 | Audio | **Compress** (128 kbps MP3), **Normalize** (loudnorm −16 LUFS), **Mono**, **Denoise** (afftdn), **Trim silence** at the start/end, **1.5× speed** (same pitch), **Fade** in/out |
@@ -132,7 +132,8 @@ Works on any file, including folders and mixed selections:
 ## Notes
 
 - **Drag detection is a heuristic.** Windows has no global API for "a file is being dragged". Shiftwheel assumes a drag is happening when the left mouse button is held and the cursor has moved more than about 20 px. The wheel can also open if you tap Shift/Ctrl/Alt while selecting text or moving a window. It closes when you release the mouse or press Esc, and nothing is processed unless a file is dropped.
-- **The wheel only opens when the key is tapped *during* the drag.** Holding Ctrl/Shift before you start dragging (the usual Explorer copy/move habit) doesn't open it.
+- **The wheel only opens when the key is tapped *during* the drag.** Holding Ctrl/Shift before you start dragging (the usual Explorer copy/move habit) doesn't open it. A tap right as the drag starts, before the cursor has moved far enough, waits up to 1.5 s for the drag to begin instead of being ignored.
+- **Taps survive lost key events.** Windows sometimes never delivers a key-up (Shift pressed on one side and released on the other, Alt+Tab). Shiftwheel treats a key as a new tap unless it repeated within the last 600 ms, so a lost key-up can never lock the wheel shut (see `hotkeys.js` and `test/hotkeys.test.js`).
 - **The wheel's contents are guessed from the MIME type** Windows provides when the file enters the wheel. For extensions Windows doesn't know, the convert wheel shows common formats (PDF, DOCX, TXT, JPG, PNG, MP3, MP4). The final check still uses the file extension, so a mismatched choice is rejected with a clear message.
 - **Alt** during a drag sometimes makes the active app (e.g. Explorer) highlight its menu bar after the drop. Press Alt or Esc once more to dismiss it.
 - **HEIC** is read through ffmpeg and hasn't been tested with real iPhone photos.

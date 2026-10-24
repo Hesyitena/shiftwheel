@@ -8,7 +8,7 @@ const { spawnSync, execFileSync } = require('child_process');
 const sharp = require('sharp');
 const { PDFDocument, StandardFonts } = require('pdf-lib');
 const { convert, findSoffice, findTool, fodtToText, imagesToPdf, probeDuration } = require('../converter');
-const { toolTasks } = require('../tools');
+const { toolTasks, previewImage, cropImage } = require('../tools');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shiftwheel-test-'));
 const p = (name) => path.join(dir, name);
@@ -274,6 +274,26 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
     assert.strictEqual(path.extname(slide1), '.png');
     assert.ok(fs.existsSync(slide1.replace(/1\.png$/, '2.png')), 'the second slide is missing');
   }, noLo || noPoppler);
+
+  await test('crop: normalized rect cuts the right pixels', async () => {
+    const out = await cropImage(p('picture.png'), { x: 0.25, y: 0, w: 0.5, h: 1 });
+    assert.strictEqual(out, p('picture (cropped).png'));
+    assert.deepStrictEqual(await dims(out), [100, 100]);
+  });
+  await test('crop: preview is a downscaled JPEG data URL with the full size', async () => {
+    const pv = await previewImage(p('framed.png'));
+    assert.deepStrictEqual([pv.width, pv.height], [200, 200]);
+    assert.ok(pv.src.startsWith('data:image/jpeg;base64,'));
+  });
+  await test('crop: the tool needs the editor, it never runs straight from the queue', () =>
+    assert.throws(() => toolTasks('image.crop', [p('picture.png')]), /opens an editor/));
+  await test("trim edges on a photo with no plain border is skipped (no identical copy)", async () => {
+    const noise = Buffer.alloc(300 * 200 * 3);
+    for (let i = 0; i < noise.length; i++) noise[i] = (i * 7919) % 251;
+    await sharp(noise, { raw: { width: 300, height: 200, channels: 3 } }).jpeg().toFile(p('busy.jpg'));
+    await assert.rejects(runTool('image.trim', [p('busy.jpg')]), (e) => e.skipped && /No plain border/.test(e.message));
+    assert.ok(!fs.existsSync(p('busy (trimmed).jpg')));
+  });
 
   await test('tool on the wrong category is rejected', () => rejects(runTool('pdf.rotate', [p('picture.png')]), /doesn't work on \.png files/));
   await test('merging needs at least 2 files', () => rejects(runTool('pdf.merge', [p('document.pdf')]), /at least 2 files/));

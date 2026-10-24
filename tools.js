@@ -46,6 +46,42 @@ async function compressImage(file) {
   return out;
 }
 
+// Trim only helps images with plain borders (screenshots, scans). On a photo it used to quietly
+// write an identical copy, which looked like the tool was broken, so that case is now skipped.
+async function trimEdges(file) {
+  const out = await sharpTool(file, 'trimmed', (img) => img.trim({ threshold: 12 }));
+  const [before, after] = await Promise.all([sharp(file).metadata(), sharp(out).metadata()]);
+  const w = (before.autoOrient || before).width, h = (before.autoOrient || before).height;
+  if (after.width === w && after.height === h) {
+    fs.rmSync(out);
+    throw skip('No plain border to trim. Use Crop to cut it by hand');
+  }
+  return out;
+}
+
+// Downscaled JPEG preview for the crop editor, plus the full size after EXIF orientation
+async function previewImage(file) {
+  return withTmpDir(async (tmp) => {
+    const img = sharp(await sharpInput(file, tmp), { animated: false }).autoOrient();
+    const { width, height } = (await img.metadata()).autoOrient;
+    const data = await img.resize({ width: 1600, height: 1600, fit: 'inside', withoutEnlargement: true })
+      .flatten({ background: '#ffffff' }).jpeg({ quality: 85 }).toBuffer();
+    return { width, height, src: `data:image/jpeg;base64,${data.toString('base64')}` };
+  });
+}
+
+// rect is normalized (0..1) so the same crop can be applied to several images
+function cropImage(file, rect) {
+  return sharpTool(file, 'cropped', (img, meta) => {
+    const { width: W, height: H } = meta.autoOrient;
+    const left = Math.min(W - 1, Math.max(0, Math.round(rect.x * W)));
+    const top = Math.min(H - 1, Math.max(0, Math.round(rect.y * H)));
+    const width = Math.max(1, Math.min(W - left, Math.round(rect.w * W)));
+    const height = Math.max(1, Math.min(H - top, Math.round(rect.h * H)));
+    return img.extract({ left, top, width, height });
+  });
+}
+
 function squareCrop(img, meta) {
   const side = Math.min(meta.autoOrient.width, meta.autoOrient.height);
   return img.resize(side, side, { fit: 'cover', position: 'attention' }); // 'attention': keep the most salient area
@@ -207,7 +243,7 @@ const TRIM_SILENCE = 'silenceremove=start_periods=1:start_threshold=-50dB,arever
 
 // ---------- Tools per category ----------
 // each(file, opts): runs per file. all(files): all files become one result (only shown when there are 2+ files).
-// icon: icon name in overlay.html.
+// icon: icon name in overlay.html. interactive: opens an editor window first (handled in main.js).
 
 const TOOLS = {
   image: [
@@ -217,7 +253,8 @@ const TOOLS = {
     { id: 'gray', icon: 'gray', label: 'Grayscale', caption: 'Convert to grayscale', each: (f) => sharpTool(f, 'grayscale', (img) => img.grayscale()) },
     { id: 'strip', icon: 'strip', label: 'Metadata', caption: 'Remove metadata (EXIF, location)', each: (f) => sharpTool(f, 'no metadata', (img) => img) },
     { id: 'flip', icon: 'flip', label: 'Mirror', caption: 'Flip horizontally', each: (f) => sharpTool(f, 'mirrored', (img) => img.flop()) },
-    { id: 'trim', icon: 'crop', label: 'Trim edges', caption: 'Cut away plain borders', each: (f) => sharpTool(f, 'trimmed', (img) => img.trim({ threshold: 12 })) },
+    { id: 'crop', icon: 'crop', label: 'Crop', caption: 'Open the crop editor', interactive: 'crop' },
+    { id: 'trim', icon: 'fit', label: 'Trim edges', caption: 'Cut away plain borders', each: trimEdges },
     { id: 'square', icon: 'square', label: 'Square', caption: 'Crop to 1:1 around the most interesting part', each: (f) => sharpTool(f, 'square', squareCrop) },
     { id: 'merge', icon: 'merge', label: 'Merge PDF', caption: 'Combine into one PDF', multi: true, all: mergeImagesToPdf },
   ],
@@ -259,6 +296,7 @@ function toolTasks(toolId, files) {
   const [cat, id] = String(toolId).split('.');
   const tool = (TOOLS[cat] || []).find((t) => t.id === id);
   if (!tool) throw new Error(`Unknown tool: ${toolId}`);
+  if (tool.interactive) throw new Error(`"${tool.label}" opens an editor and can't run directly`);
 
   const ofCat = (f) => {
     checkInput(f);
@@ -280,4 +318,4 @@ function toolTasks(toolId, files) {
   return files.map((f) => ({ ...info, name: path.basename(String(f || '')), run: async (opts = {}) => { ofCat(f); return tool.each(f, opts); } }));
 }
 
-module.exports = { TOOLS, toolTasks };
+module.exports = { TOOLS, toolTasks, previewImage, cropImage };
