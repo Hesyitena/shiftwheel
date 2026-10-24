@@ -12,7 +12,7 @@
     "predist": "node scripts/make-ico.js",
     "dist": "electron-builder --win",
     "install-local": "node scripts/install-local.js",
-    "test": "node test/check.js && node test/converter.test.js"
+    "test": "node test/check.js && node test/hotkeys.test.js && node test/converter.test.js"
   },
   "build": {
     "appId": "com.local.shiftwheel",
@@ -24,6 +24,8 @@
       "hud.html",
       "converter.js",
       "tools.js",
+      "crop.html",
+      "hotkeys.js",
       "assets/**"
     ],
     "asarUnpack": [

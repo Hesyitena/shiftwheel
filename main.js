@@ -2,10 +2,11 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile, spawn } = require('child_process');
-const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, screen, ipcMain, shell, powerMonitor, clipboard, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, Notification, nativeImage, nativeTheme, screen, ipcMain, shell, powerMonitor, clipboard, dialog } = require('electron');
 const { uIOhook, UiohookKey } = require('uiohook-napi');
-const { convert, uniquePath, CATEGORIES, FALLBACK_TARGETS } = require('./converter');
-const { TOOLS, toolTasks } = require('./tools');
+const { convert, uniquePath, categoryOf, CATEGORIES, FALLBACK_TARGETS } = require('./converter');
+const { TOOLS, toolTasks, previewImage, cropImage } = require('./tools');
+const { createTaps } = require('./hotkeys');
 
 const APP_ID = 'com.local.shiftwheel'; // must match build.appId in package.json
 const OVERLAY_W = 360;
@@ -347,13 +348,78 @@ ipcMain.on('overlay:drop', (e, msg) => {
   if (kind === 'convert') enqueue(paths, value);
   else if (kind === 'action') runAction(value, paths);
   else if (kind === 'tool') {
+    const [cat, toolId] = value.split('.');
+    const tool = (TOOLS[cat] || []).find((t) => t.id === toolId);
+    if (tool && tool.interactive === 'crop') return openCropEditor(paths);
     try { enqueueTasks(toolTasks(value, paths)); } catch (err) { notify("Can't use this tool", err.message); }
   }
+});
+
+// ---------- Crop editor (a regular window, opened by the Crop tool) ----------
+
+let cropWin = null;
+let cropFiles = [];
+
+async function openCropEditor(paths) {
+  if (cropWin) return cropWin.focus(); // one editor at a time
+  const images = paths.filter((f) => categoryOf(f) === 'image' && fs.existsSync(f));
+  if (!images.length) return notify("Can't crop", 'Drop one or more images on Crop.');
+  let preview;
+  try {
+    preview = await previewImage(images[0]);
+  } catch (err) {
+    return notify("Couldn't open the image", err.message);
+  }
+  cropFiles = images;
+  const dark = nativeTheme.shouldUseDarkColors;
+  cropWin = new BrowserWindow({
+    width: 980,
+    height: 720,
+    minWidth: 640,
+    minHeight: 480,
+    show: false,
+    title: 'Crop',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    backgroundColor: dark ? '#0b0b0b' : '#f2f2f2',
+    autoHideMenuBar: true,
+    // Our header is the title bar; Windows still draws its own minimize/maximize/close buttons
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: dark ? '#161616' : '#ffffff', symbolColor: dark ? '#f5f5f7' : '#111111', height: 44 },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, spellcheck: false },
+  });
+  cropWin.webContents.on('will-navigate', (e) => e.preventDefault());
+  cropWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  cropWin.webContents.once('did-finish-load', () => {
+    cropWin.webContents.send('crop:init', { ...preview, name: path.basename(images[0]), count: images.length });
+  });
+  cropWin.once('ready-to-show', () => {
+    // A tray app can't normally steal focus from Explorer; briefly topmost brings it to the front
+    cropWin.setAlwaysOnTop(true);
+    cropWin.show();
+    cropWin.focus();
+    cropWin.setAlwaysOnTop(false);
+  });
+  cropWin.on('closed', () => {
+    cropWin = null;
+    cropFiles = [];
+  });
+  cropWin.loadFile(path.join(__dirname, 'crop.html'));
+}
+
+ipcMain.on('crop:done', (e, rect) => {
+  if (!cropWin || e.sender !== cropWin.webContents) return;
+  const files = cropFiles;
+  cropWin.close();
+  const ok = rect && ['x', 'y', 'w', 'h'].every((k) => Number.isFinite(rect[k])) && rect.w > 0 && rect.h > 0;
+  if (!ok) return; // cancelled
+  const r = { x: rect.x, y: rect.y, w: rect.w, h: rect.h };
+  enqueueTasks(files.map((f) => ({ name: path.basename(f), label: 'Crop', chip: 'Crop', run: () => cropImage(f, r) })));
 });
 
 // ---------- Overlay ----------
 
 let shown = false;
+let shownMode = null;
 let hideTimer = null;
 
 function createOverlay() {
@@ -376,6 +442,8 @@ function placeOverlay(p) {
 
 function openWheel(mode, cursor) {
   const fresh = !shown;
+  if (!fresh && mode === shownMode) return; // same wheel already open
+  shownMode = mode;
   clearTimeout(hideTimer);
   if (fresh) placeOverlay(cursor);
   overlay.webContents.send('overlay:show', { mode, fresh });
@@ -409,24 +477,46 @@ function hideNow() {
 // everyday mouse movement costs almost no CPU.
 
 const drag = { down: false, x0: 0, y0: 0 }; // click position in DIP
-const held = new Set(); // ignore auto-repeat while a key is held
+const taps = createTaps(TRIGGER); // tap detection that survives lost keyups (see hotkeys.js)
 let hookRunning = false;
+let pendingTimer = null;
+
+const dragDistance = (c) => Math.hypot(c.x - drag.x0, c.y - drag.y0);
+
+function stopPending() {
+  clearInterval(pendingTimer);
+  pendingTimer = null;
+}
+
+// A tap right as the drag starts (before the cursor has moved far enough) used to be dropped.
+// Now it waits up to 1.5 s for the cursor to move, polling only during that window.
+function openWhenDragging(mode) {
+  stopPending();
+  const cursor = screen.getCursorScreenPoint();
+  if (dragDistance(cursor) > DRAG_THRESHOLD) return openWheel(mode, cursor);
+  let tries = 0;
+  pendingTimer = setInterval(() => {
+    const c = screen.getCursorScreenPoint();
+    if (!drag.down || ++tries > 30) return stopPending();
+    if (dragDistance(c) > DRAG_THRESHOLD) {
+      stopPending();
+      openWheel(mode, c);
+    }
+  }, 50);
+}
 
 uIOhook.on('keydown', (e) => {
   if (e.keycode === UiohookKey.Escape) {
     if (shown) playSound('cancel');
     return hideNow();
   }
-  const mode = TRIGGER[e.keycode];
-  if (!mode || held.has(e.keycode)) return;
-  held.add(e.keycode);
-  if (!enabled || !drag.down) return;
+  const mode = taps.down(e.keycode, Date.now());
+  if (!mode || !enabled || !drag.down) return;
   if (shown) return openWheel(mode); // switch wheels
-  const cursor = screen.getCursorScreenPoint();
-  if (Math.hypot(cursor.x - drag.x0, cursor.y - drag.y0) > DRAG_THRESHOLD) openWheel(mode, cursor);
+  openWhenDragging(mode);
 });
 
-uIOhook.on('keyup', (e) => held.delete(e.keycode));
+uIOhook.on('keyup', (e) => taps.up(e.keycode));
 
 uIOhook.on('mousedown', (e) => {
   if (e.button !== 1) return;
@@ -438,6 +528,7 @@ uIOhook.on('mousedown', (e) => {
 uIOhook.on('mouseup', (e) => {
   if (e.button !== 1) return;
   drag.down = false;
+  stopPending();
   scheduleHide();
 });
 
@@ -455,7 +546,8 @@ function stopHook() {
   if (!hookRunning) return;
   try { uIOhook.stop(); } catch { /* already stopped */ }
   hookRunning = false;
-  held.clear();
+  taps.reset();
+  stopPending();
   drag.down = false;
   hideNow();
 }
@@ -556,5 +648,6 @@ if (!app.requestSingleInstanceLock({ argv: process.argv })) {
     else startBackground();
   });
 
+  app.on('window-all-closed', () => {}); // a tray app keeps running when its windows close
   app.on('will-quit', stopHook);
 }
