@@ -24,7 +24,9 @@ function createTaps(keyToMode) {
     /** Any side's keyup releases the mode, so left-down/right-up pairs can't get stuck. */
     up(keycode) {
       const mode = keyToMode[keycode];
-      if (mode) lastDown.delete(mode);
+      if (!mode) return null;
+      lastDown.delete(mode);
+      return mode;
     },
     reset() {
       lastDown.clear();

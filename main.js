@@ -15,8 +15,9 @@ const HUD_W = 340;
 const HUD_H = 92;
 const HUD_DELAY = 600; // ms before the progress HUD appears
 const WHEEL_CENTER = 180; // wheel center inside the overlay window
-const DRAG_THRESHOLD = 16; // DIP (~20 physical px at 125% scaling)
-const HIDE_DELAY = 400; // give the drop event time to arrive before the overlay hides
+const WHEEL_RADIUS = 146; // outer radius of the wheel ring
+const DRAG_THRESHOLD = 4; // DIP (matches Windows Explorer's 4 px drag threshold)
+const HIDE_DELAY = 350; // give the drop event and fade-out animation time before hiding
 const LINGER_MS = 8000; // --convert mode: wait a little so the notification can still be clicked
 const LOGIN_ARGS = ['--hidden'];
 
@@ -338,6 +339,9 @@ function wheelConfig() {
 
 ipcMain.on('overlay:drop', (e, msg) => {
   if (!overlay || e.sender !== overlay.webContents) return;
+  Object.assign(drag, { down: false, moved: false, pending: null, preTap: null });
+  stopPending();
+  scheduleHide();
   const id = msg && typeof msg.id === 'string' ? msg.id : '';
   const paths = Array.isArray(msg && msg.paths) ? msg.paths.filter((p) => typeof p === 'string' && p) : [];
   if (!id || paths.length === 0) return; // dropped in the center / outside a segment = cancel
@@ -441,13 +445,21 @@ function placeOverlay(p) {
 }
 
 function openWheel(mode, cursor) {
-  const fresh = !shown;
-  if (!fresh && mode === shownMode) return; // same wheel already open
+  const c = cursor || screen.getCursorScreenPoint();
+  const b = overlay.getBounds();
+  const outside = shown && Math.hypot(c.x - (b.x + WHEEL_CENTER), c.y - (b.y + WHEEL_CENTER)) > WHEEL_RADIUS;
+  const fresh = !shown || !overlay.isVisible() || outside;
+  if (!fresh && mode === shownMode) return; // same wheel already open under the cursor
   shownMode = mode;
   clearTimeout(hideTimer);
-  if (fresh) placeOverlay(cursor);
+  if (fresh) placeOverlay(c);
+  overlay.setIgnoreMouseEvents(false);
   overlay.webContents.send('overlay:show', { mode, fresh });
-  if (fresh) overlay.showInactive();
+  if (fresh) {
+    overlay.showInactive();
+    overlay.setAlwaysOnTop(true, 'screen-saver');
+    overlay.moveTop();
+  }
   shown = true;
 }
 
@@ -467,67 +479,148 @@ function playSound(name) {
 function hideNow() {
   shown = false;
   clearTimeout(hideTimer);
-  if (overlay) overlay.hide();
+  if (overlay) {
+    overlay.setIgnoreMouseEvents(true);
+    overlay.hide();
+  }
 }
 
 // ---------- Global hook (uiohook) ----------
-// "A file is being dragged" heuristic: left button held and the cursor has moved > DRAG_THRESHOLD
-// when Shift/Ctrl/Alt is tapped. The wheel stays open until the mouse is released (or Esc).
-// Deliberately no mousemove listener: the distance is checked once when a key is tapped, so
-// everyday mouse movement costs almost no CPU.
+// "A file is being dragged" heuristic: mouse button held and the cursor has moved >= DRAG_THRESHOLD
+// at any point during the drag. Once moved, drag.moved stays true even if the cursor returns near
+// the click point. The wheel stays open until the mouse is released (or Esc).
 
-const drag = { down: false, x0: 0, y0: 0 }; // click position in DIP
+const drag = { down: false, moved: false, x0: 0, y0: 0, pending: null, preTap: null, lastMove: 0 };
+const prevMods = { shift: false, ctrl: false, alt: false };
 const taps = createTaps(TRIGGER); // tap detection that survives lost keyups (see hotkeys.js)
 let hookRunning = false;
 let pendingTimer = null;
+let lastHookCursor = { x: -1, y: -1 };
+let lastMouseTime = 0;
 
 const dragDistance = (c) => Math.hypot(c.x - drag.x0, c.y - drag.y0);
+
+function syncMods(e) {
+  prevMods.shift = Boolean(e.shiftKey);
+  prevMods.ctrl = Boolean(e.ctrlKey);
+  prevMods.alt = Boolean(e.altKey);
+}
 
 function stopPending() {
   clearInterval(pendingTimer);
   pendingTimer = null;
+  drag.pending = null;
 }
 
-// A tap right as the drag starts (before the cursor has moved far enough) used to be dropped.
-// Now it waits up to 1.5 s for the cursor to move, polling only during that window.
+// A tap right as the drag starts (before the cursor has moved far enough) waits for the cursor to move.
 function openWhenDragging(mode) {
   stopPending();
   const cursor = screen.getCursorScreenPoint();
-  if (dragDistance(cursor) > DRAG_THRESHOLD) return openWheel(mode, cursor);
-  let tries = 0;
+  if (drag.moved || dragDistance(cursor) >= DRAG_THRESHOLD) {
+    drag.moved = true;
+    return openWheel(mode, cursor);
+  }
+  drag.pending = mode;
   pendingTimer = setInterval(() => {
+    if (!drag.down) return stopPending();
     const c = screen.getCursorScreenPoint();
-    if (!drag.down || ++tries > 30) return stopPending();
-    if (dragDistance(c) > DRAG_THRESHOLD) {
+    if (drag.moved || dragDistance(c) >= DRAG_THRESHOLD) {
+      drag.moved = true;
+      const m = drag.pending || mode;
       stopPending();
-      openWheel(mode, c);
+      openWheel(m, c);
     }
-  }, 50);
+  }, 40);
+}
+
+function triggerMode(mode) {
+  if (!mode || !enabled || !drag.down) return;
+  if (shown) return openWheel(mode); // switch wheels (or reposition if dragged outside)
+  openWhenDragging(mode);
 }
 
 uIOhook.on('keydown', (e) => {
   if (e.keycode === UiohookKey.Escape) {
-    if (shown) playSound('cancel');
-    return hideNow();
+    stopPending();
+    return shown ? scheduleHide() : hideNow();
   }
-  const mode = taps.down(e.keycode, Date.now());
-  if (!mode || !enabled || !drag.down) return;
-  if (shown) return openWheel(mode); // switch wheels
-  openWhenDragging(mode);
+  const now = Date.now();
+  const mode = taps.down(e.keycode, now);
+  if (!mode || !enabled) return;
+  if (!drag.down) {
+    drag.preTap = { mode, time: now };
+    // Self-heal if Windows silently dropped the mouse hook (cursor moved without mousemove events)
+    const c = screen.getCursorScreenPoint();
+    if (lastMouseTime && now - lastMouseTime > 200 && Math.hypot(c.x - lastHookCursor.x, c.y - lastHookCursor.y) > DRAG_THRESHOLD) {
+      rehook();
+    }
+    return;
+  }
+  drag.preTap = null;
+  triggerMode(mode);
 });
 
-uIOhook.on('keyup', (e) => taps.up(e.keycode));
+uIOhook.on('keyup', (e) => {
+  const mode = taps.up(e.keycode);
+  // A quick tap that started just before mousedown and released during the drag is a tap, not an Explorer hold
+  if (mode && enabled && drag.down && !shown && drag.preTap && drag.preTap.mode === mode && Date.now() - drag.preTap.time < 450) {
+    drag.preTap = null;
+    triggerMode(mode);
+  }
+});
 
 uIOhook.on('mousedown', (e) => {
-  if (e.button !== 1) return;
-  // uiohook reports physical pixels; convert to DIP so it's right at scaling other than 100%
-  const p = screen.screenToDipPoint({ x: e.x, y: e.y });
-  Object.assign(drag, { down: true, x0: p.x, y0: p.y });
+  const now = Date.now();
+  const p = screen.getCursorScreenPoint();
+  lastHookCursor = p;
+  lastMouseTime = now;
+  syncMods(e);
+  if (e.button !== 1 && e.button !== 2) return;
+  // Ignore a secondary touchpad contact while an active drag is already moving
+  if (drag.down && drag.moved && now - drag.lastMove < 200) return;
+  if (shown) hideNow();
+  if (!e.shiftKey) taps.up(UiohookKey.Shift);
+  if (!e.ctrlKey) taps.up(UiohookKey.Ctrl);
+  if (!e.altKey) taps.up(UiohookKey.Alt);
+  const preTap = drag.preTap && now - drag.preTap.time < 300 ? drag.preTap : null;
+  Object.assign(drag, { down: true, moved: false, x0: p.x, y0: p.y, pending: null, preTap, lastMove: now });
+});
+
+uIOhook.on('mousemove', (e) => {
+  lastMouseTime = Date.now();
+  if (!drag.down) {
+    syncMods(e);
+    return;
+  }
+  const now = lastMouseTime;
+  drag.lastMove = now;
+  const c = screen.getCursorScreenPoint();
+  lastHookCursor = c;
+  if (!drag.moved && dragDistance(c) >= DRAG_THRESHOLD) {
+    drag.moved = true;
+    if (drag.pending) {
+      const m = drag.pending;
+      stopPending();
+      openWheel(m, c);
+    }
+  }
+  // Fallback when the keyboard hook misses a keydown (e.g. UIPI focus state) but mousemove sees the modifier
+  const edgeKey = (!prevMods.shift && e.shiftKey && UiohookKey.Shift)
+    || (!prevMods.ctrl && e.ctrlKey && UiohookKey.Ctrl)
+    || (!prevMods.alt && e.altKey && UiohookKey.Alt);
+  syncMods(e);
+  if (edgeKey) {
+    const mode = taps.down(edgeKey, now);
+    if (mode) triggerMode(mode);
+  }
 });
 
 uIOhook.on('mouseup', (e) => {
-  if (e.button !== 1) return;
-  drag.down = false;
+  lastMouseTime = Date.now();
+  lastHookCursor = screen.getCursorScreenPoint();
+  syncMods(e);
+  if (e.button !== 1 && e.button !== 2) return;
+  Object.assign(drag, { down: false, moved: false, pending: null, preTap: null });
   stopPending();
   scheduleHide();
 });
@@ -548,8 +641,13 @@ function stopHook() {
   hookRunning = false;
   taps.reset();
   stopPending();
-  drag.down = false;
+  Object.assign(drag, { down: false, moved: false, pending: null, preTap: null });
   hideNow();
+}
+
+function rehook() {
+  stopHook();
+  startHook();
 }
 
 // ---------- Tray ----------
@@ -625,7 +723,9 @@ function startBackground() {
   startHook();
 
   powerMonitor.on('suspend', stopHook);
-  powerMonitor.on('resume', () => { stopHook(); startHook(); }); // the hook can die after sleep
+  powerMonitor.on('resume', rehook); // the hook can die after sleep or screen lock
+  powerMonitor.on('lock-screen', stopHook);
+  powerMonitor.on('unlock-screen', rehook);
 
   if (firstRun && !hidden) notify('Shiftwheel is ready', 'Start dragging a file, then tap Shift to convert, Ctrl for tools, or Alt for actions.');
 }

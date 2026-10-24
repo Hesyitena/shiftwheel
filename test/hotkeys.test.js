@@ -50,7 +50,8 @@ test('switching keys works while another key is held', () => {
 test('unrelated keys are ignored', () => {
   const t = createTaps(keys);
   assert.strictEqual(t.down(A, 0), null);
-  t.up(A);
+  assert.strictEqual(t.up(A), null);
+  assert.strictEqual(t.up(SHIFT_R), 'convert');
 });
 
 test('reset forgets every key', () => {
