@@ -1,144 +1,201 @@
 # Shiftwheel
 
-A radial drag-and-drop file converter and toolkit for Windows 11. Start dragging a file in Explorer, **tap** a key, and a wheel opens around the cursor. It stays open until you drop the file:
+A radial drag-and-drop file converter and toolkit for Windows 11. Start dragging a file in Explorer, **tap** a key, and a wheel opens right around your cursor. It stays open until you drop the file:
 
-| Tap while dragging | Wheel | Examples |
+| Tap while dragging | Wheel | What it does |
 |---|---|---|
-| **Shift** | Convert | image → JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF, TXT |
-| **Ctrl** | Tools | compress, rotate, trim edges, merge into a PDF, denoise audio |
-| **Alt** | File actions | copy path, copy, copy to…, move to…, terminal, show in Explorer |
+| **Shift** | **Convert** | Convert between image, PDF, document, spreadsheet, presentation, audio, and video formats |
+| **Ctrl** | **Tools** | One-click utilities: compress, crop, resize, rotate, strip metadata, merge/split PDF, denoise audio, and more |
+| **Alt** | **File actions** | Copy file path, copy files to clipboard, copy/move to folder, open in Terminal, or reveal in Explorer |
 
-The wheel's contents depend on the type of file you're dragging. The center of the wheel shows what you're carrying (for example "2 images"), then the name and description of the highlighted option. The small bar under the wheel shows the active wheel; tap another key to switch. Drop on the center ("Cancel") or outside the wheel, or press **Esc**, to cancel. Results are saved next to the original file.
+---
 
-If a job takes more than half a second, a small progress card appears in the bottom-right corner (with a percentage for audio/video). When it's done you get a notification such as "report.pdf is ready"; click it to open the folder.
+## Key Features
 
-Shiftwheel lives in the system tray with no window. The tray menu has **Enabled**, **Sounds**, **Start with Windows**, and **Quit**.
+- **Cursor-Centered Radial Menu**: Opens right under your cursor while dragging one or more files. Tap **Shift**, **Ctrl**, or **Alt** mid-drag to switch between wheels on the fly.
+- **Context-Aware Options**: Automatically detects the dragged file category (image, PDF, document, spreadsheet, presentation, audio, video) and displays only relevant formats and tools. Multi-file tools (like **Merge PDF**) appear automatically when dragging 2 or more files.
+- **Non-Destructive by Default**: Original files are never modified or overwritten. Outputs are saved next to the source file (`report.pdf`, `photo (compressed).jpg`, or `name (1).ext` if a filename already exists).
+- **Interactive Crop Editor**: Includes a dedicated, hardware-free crop window with aspect-ratio presets (**Free**, **1:1**, **4:3**, **3:2**, **16:9**, **9:16**), rule-of-thirds grid, 8-handle resizing, and batch cropping across multiple images at once.
+- **Built-In Offline OCR**: Extracts text from images (`Image → TXT`) and scanned/photographed PDFs (`PDF → TXT`) using Windows' built-in OCR engine — completely offline.
+- **Live Progress HUD & Clickable Notifications**: Jobs taking longer than 0.6 seconds display a compact progress card in the bottom-right corner (with real-time percentage for audio/video jobs). Clicking the completion notification reveals the new file in Explorer.
+- **Zero-Asset Synthesized Sound Effects**: Crisp, subtle UI sounds (`open`, `close`, `tick`, `switch`, `select`, `cancel`, `done`, `error`) synthesized in real time via the WebAudio API — no audio files bundled. Can be toggled anytime from the system tray.
+- **Explorer Context Menu Integration**: Right-click any file in Explorer → **Show more options** → **Convert with Shiftwheel** → **PDF / DOCX / TXT / JPG** even without dragging.
+- **100% Offline & Lightweight**: No internet connection, no telemetry, and no uploads. Tuned to use ~75 MB of RAM while idle in the system tray.
 
-**Sounds.** Short sound effects when the wheel opens, when you move between segments, when you switch wheels (Shift/Ctrl/Alt), when a file is dropped or cancelled, and when a job fails. The "done" chime only plays for jobs that take more than 1.5 seconds, so instant conversions stay quiet. All sounds are synthesized on the fly (WebAudio), no audio files. Turn them off with **Sounds** in the tray menu; the choice is saved.
+---
+
+## 1. Convert Wheel (`Shift`)
+
+Tap **Shift** while dragging to convert files between formats:
+
+| Category | Input Formats (`From`) | Target Formats (`To`) | Engine Used |
+|---|---|---|---|
+| **Images** | `png`, `jpg`, `webp`, `gif`, `tiff`, `avif`, `bmp`, `heic`, `svg` | **JPG**, **PNG**, **WEBP**, **AVIF**, **TIFF**, **GIF**, **BMP**, **PDF**, **TXT** | `sharp`, `pdf-lib`, Windows OCR (`bmp`/`heic` via `ffmpeg`) |
+| **PDF** | `pdf` | **DOCX**, **TXT**, **JPG**, **PNG** | LibreOffice, `pdftoppm`, Windows OCR |
+| **Documents** | `doc`, `docx`, `odt`, `rtf`, `txt`, `html` | **PDF**, **DOCX**, **ODT**, **RTF**, **TXT**, **HTML** | LibreOffice |
+| **Spreadsheets** | `xls`, `xlsx`, `ods`, `csv` | **PDF**, **XLSX**, **ODS**, **CSV** | LibreOffice |
+| **Presentations** | `ppt`, `pptx`, `odp` | **PDF**, **PPTX**, **ODP** | LibreOffice |
+| **Audio** | `mp3`, `m4a`, `wav`, `flac`, `ogg`, `opus`, `aiff`, `wma`, `aac` | **MP3**, **M4A**, **WAV**, **FLAC**, **OGG**, **OPUS**, **AIFF** | `ffmpeg` |
+| **Video** | `mp4`, `mov`, `mkv`, `webm`, `avi`, `wmv`, `m4v` | **MP4**, **MOV**, **MKV**, **WEBM**, **GIF**, **MP3** | `ffmpeg` |
+
+### Conversion Details
+- **Image → JPG**: Follows EXIF orientation automatically, flattens transparency onto white, and encodes at quality 92. Animated **GIF ↔ WEBP** conversions preserve animation frames.
+- **Image → TXT (OCR)**: Reads text offline using Windows' built-in OCR. Small images are upscaled 2× first so fine print remains accurate. Images with no recognizable text are skipped rather than creating an empty `.txt` file.
+- **Image → PDF**: Creates a clean single-page PDF (595 pt / A4 width) matching the image's aspect ratio.
+- **PDF → JPG / PNG**: Renders every page at 150 DPI (`name.jpg` for single-page PDFs, or `name 1.jpg`, `name 2.jpg`, … for multi-page documents).
+- **PDF → TXT**: Reads text frames via FODT and sorts them by page coordinates so multi-column and table layouts read naturally from left to right. If a PDF is scanned (contains images but no text layer), Shiftwheel automatically renders each page at 200 DPI and runs Windows OCR.
+- **PDF → DOCX**: Converts via LibreOffice so text boxes remain editable in Word.
+- **Video Conversions**: **MP4 / MOV / MKV** use H.264 + AAC (`CRF 20`); **WEBM** uses VP9 + Opus; **GIF** renders at 12 fps (max 480 px wide); **MP3** extracts the audio track.
+- **Smart Skip**: Files that are already in the chosen target format are skipped automatically.
+
+---
+
+## 2. Tools Wheel (`Ctrl`)
+
+Tap **Ctrl** while dragging to run one-click tools. Results are saved as new suffixed files (e.g. `photo (compressed).jpg`) so originals are never altered.
+
+### Image Tools
+| Tool | Description |
+|---|---|
+| **Compress** | Resizes to max 2560 px and optimizes encoding (`mozjpeg` / palette PNG / WebP / AVIF). Skipped automatically if the output isn't smaller than the original. |
+| **50%** | Scales image dimensions down to 50%. |
+| **Rotate** | Rotates 90° clockwise (respecting EXIF orientation). |
+| **Grayscale** | Converts the image to black and white. |
+| **Metadata** | Strips EXIF, camera, and GPS location metadata. |
+| **Mirror** | Flips the image horizontally. |
+| **Crop** | Opens the interactive **Crop Editor** window with **Free**, **1:1**, **4:3**, **3:2**, **16:9**, and **9:16** aspect ratios. When dragging multiple images, the chosen crop region is applied proportionally to all of them. |
+| **Trim edges** | Automatically detects and cuts away plain solid borders around screenshots or scans (skipped if the photo has no plain border). |
+| **Square** | Smart-crops to a `1:1` square centered on the most visually salient region of the image. |
+| **Merge PDF** | *(Shown when dragging 2+ images)* Combines all dragged images into a single `Merged.pdf`. |
+
+### PDF Tools
+| Tool | Description |
+|---|---|
+| **Merge** | *(Shown when dragging 2+ PDFs)* Combines multiple PDFs into a single `Merged.pdf`. |
+| **Split** | Splits a multi-page PDF into separate single-page files (`name page 1.pdf`, `name page 2.pdf`, …). |
+| **Rotate** | Rotates every page in the PDF by 90° clockwise. |
+| **Metadata** | Removes title, author, subject, keywords, creator, producer, and XMP metadata streams. |
+| **Page numbers** | Stamps `1 / N` page numbers centered at the bottom of every page. |
+| **Reverse** | Reverses the page order of the PDF from last to first. |
+
+### Video Tools
+| Tool | Description |
+|---|---|
+| **Compress** | Downscales to max 1080p and re-encodes with H.264 (`CRF 28`, `+faststart`) for smaller file size. |
+| **720p** | Resizes video height to 720p while preserving aspect ratio. |
+| **Mute** | Strips the audio track instantly without re-encoding the video stream (`-c:v copy -an`). |
+| **Rotate** | Rotates the video 90° clockwise. |
+| **Thumbnail** | Extracts a high-quality `.jpg` frame from the midpoint of the video. |
+| **2× speed** | Doubles playback speed (`2×`) for both video and audio while preserving pitch. |
+
+### Audio Tools
+| Tool | Description |
+|---|---|
+| **Compress** | Converts and compresses audio to a 128 kbps MP3. |
+| **Normalize** | Normalizes loudness to broadcast standard (`-16 LUFS` via FFmpeg `loudnorm`). |
+| **Mono** | Mixes stereo/multi-channel audio down to a single mono channel. |
+| **Denoise** | Reduces background hiss and noise using FFT spectral denoising (`afftdn`). |
+| **Trim silence** | Trims leading and trailing silence from the recording. |
+| **1.5× speed** | Speeds up playback by `1.5×` while keeping the original voice/music pitch (`atempo=1.5`). |
+| **Fade** | Adds a smooth 2-second fade-in at the start and fade-out at the end. |
+
+### Document, Spreadsheet & Presentation Tools
+| Tool | Description |
+|---|---|
+| **Merge PDF** | *(Shown when dragging 2+ files)* Converts and combines multiple Office files into a single `Merged.pdf`. |
+| **Pages / Slides** | Exports every page or slide as a separate `.png` image (requires LibreOffice + Poppler). |
+
+---
+
+## 3. File Actions Wheel (`Alt`)
+
+Tap **Alt** while dragging any file, folder, or multi-selection:
+
+| Action | Description |
+|---|---|
+| **Copy path** | Copies the full absolute path(s) to the clipboard as plain text (one line per item). |
+| **Copy** | Copies the actual file(s) or folder(s) to the Windows clipboard (`CF_HDROP`), ready to paste anywhere with `Ctrl+V`. |
+| **Copy to** | Opens a folder picker and copies all dragged items into the chosen folder (auto-renaming on collision). |
+| **Move to** | Opens a folder picker and moves all dragged items into the chosen folder (works across different drives). |
+| **Terminal** | Opens the item's folder directly in **Windows Terminal** (`wt.exe`), falling back to **Command Prompt** (`cmd.exe`). |
+| **Explorer** | Opens File Explorer and highlights the dragged item. |
+
+---
+
+## 4. System Tray & Sound Effects
+
+Shiftwheel runs quietly in the Windows system tray with no main window:
+- **Enabled**: Toggle the drag-and-drop hook on or off (`Shift+Ctrl+Alt` detection).
+- **Sounds**: Toggle synthesized UI sound effects on or off (persisted in `%APPDATA%\Shiftwheel\settings.json`).
+- **Start with Windows**: Automatically launch Shiftwheel hidden in the tray at login.
+- **Quit**: Exit Shiftwheel completely.
+
+**Synthesized Audio Feedback:**
+- **Open / Close**: Gentle rising (`620 → 940 Hz`) and falling (`840 → 540 Hz`) sine tones when the wheel opens or closes.
+- **Hover Tick**: Rate-limited soft triangle click as you sweep across segments.
+- **Wheel Switch**: Two-note chime when switching between `Shift`, `Ctrl`, and `Alt` wheels.
+- **Select / Cancel / Done / Error**: Distinct tonal cues on drop, cancellation, long-job completion (>1.5 s), and error.
+
+---
 
 ## Requirements
 
-Everything runs locally on your PC; no file is ever uploaded. These helper programs are used as needed (Shiftwheel looks for them in common install folders, winget packages, and PATH):
+Everything runs locally on your PC. Plain image conversions, image tools, and PDF tools work out of the box with zero external dependencies. For Office documents, audio/video, and PDF rasterization, Shiftwheel automatically locates these helper tools in standard install paths, `winget` packages, or `PATH`:
 
-| Program | Used for | Install |
+| Program | Used for | Install Command |
 |---|---|---|
-| [LibreOffice](https://www.libreoffice.org/download/) | documents, spreadsheets, presentations, PDF → DOCX/TXT | `winget install TheDocumentFoundation.LibreOffice` |
-| [ffmpeg](https://www.gyan.dev/ffmpeg/builds/) | audio, video, BMP/HEIC images | `winget install Gyan.FFmpeg` |
-| [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) | PDF → JPG/PNG, OCR for scanned PDFs | `winget install oschwartz10612.Poppler` |
-| Windows OCR | image → TXT, scanned PDF → TXT | built into Windows 10/11; active when a language with the OCR feature is installed (English works for any Latin-script text) |
+| [LibreOffice](https://www.libreoffice.org/download/) | Documents, spreadsheets, presentations, `PDF → DOCX/TXT` | `winget install TheDocumentFoundation.LibreOffice` |
+| [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) | Audio, video, `BMP`/`HEIC` images | `winget install Gyan.FFmpeg` |
+| [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) | `PDF → JPG/PNG`, OCR for scanned PDFs, document `Pages/Slides` | `winget install oschwartz10612.Poppler` |
+| Windows OCR | `Image → TXT`, scanned `PDF → TXT` | Built into Windows 10/11 (requires at least one installed OCR language pack, e.g. English) |
 
-Plain image conversions and all image/PDF tools need nothing extra. If a helper program is missing, the notification tells you the command to install it.
+If a required helper program is missing, Shiftwheel displays a notification with the exact `winget` command to install it.
 
-For development: Node.js 20+.
+---
 
-## Installing for everyday use
+## Installing for Everyday Use
+
+For development or building from source (requires Node.js 20+):
 
 ```bash
 npm install
 npm run dist
 ```
 
-The installer ends up in `dist/Shiftwheel Setup <version>.exe`. Run it:
+The installer is created at `dist/Shiftwheel Setup <version>.exe`:
+- Installs per-user in `%LOCALAPPDATA%\Programs\Shiftwheel` (no administrator privileges required).
+- Adds a Start Menu shortcut and registers the **Convert with Shiftwheel** Explorer context menu.
+- Enables autostart on first run (`--hidden` straight to the system tray).
 
-- Installs per user in `%LOCALAPPDATA%\Programs\Shiftwheel`, no admin rights needed.
-- Adds a Start Menu shortcut (no desktop shortcut).
-- Starts the app right away and shows a "Shiftwheel is ready" notification.
-- On first run, autostart is turned on (`--hidden`: straight to the tray, no notification). You can turn it off from the tray menu.
-- Right-click a file in Explorer → **Show more options** → **Convert with Shiftwheel** → PDF / DOCX / TXT / JPG.
-
-Uninstall from Settings → Apps. The uninstaller closes Shiftwheel if it's running, then removes the autostart entry and the context menu. Settings in `%APPDATA%\Shiftwheel` are kept.
+---
 
 ## Light on CPU and RAM
 
-Shiftwheel runs in the background all the time, so it's built to be as cheap as possible:
+Shiftwheel is engineered to stay in the background all day with minimal overhead (~75 MB private RAM across 3 processes, ~0.4% of one CPU core when idle):
+- **No GPU Process**: Renders on CPU (`app.disableHardwareAcceleration()`), dropping Chromium's GPU footprint from ~80 MB to ~15 MB.
+- **In-Process Network Service**: Runs `NetworkServiceInProcess` since Shiftwheel never uses the network.
+- **Lazy-Loaded Native Modules**: `sharp` (`libvips`) and `pdf-lib` are loaded on demand only when the first conversion runs.
+- **On-Demand Windows**: Both the progress HUD and the Crop Editor window are created only when needed and destroyed immediately after use.
+- **Auto-Closing Audio Engine**: The `AudioContext` closes 1.5 seconds after the last sound effect and recreates in ~25–55 ms when needed.
 
-- **No GPU.** The wheel renders fine on the CPU; Chromium's GPU process drops from ~80 MB to ~15 MB.
-- **No network process.** The network service runs inside the main process (Shiftwheel never uses the internet).
-- **Heavy libraries load on demand.** sharp (libvips) and pdf-lib only load on the first conversion.
-- **The progress window is created when needed** and destroyed again when the job is done.
-- **Audio turns off when idle.** The sound engine closes 1.5 seconds after the last sound and is recreated when needed (~25–55 ms; faster than waking a suspended one, which on Windows can take up to ~440 ms).
-- **A hook without `mousemove`.** Everyday mouse movement isn't processed; the drag distance is checked once when Shift/Ctrl/Alt is tapped.
-- LibreOffice, ffmpeg, and OCR only run while a file is being processed.
+---
 
-Measured idle footprint of the installed app: ~75 MB of private RAM across 3 processes, ~0.4% of one CPU core.
+## Development Commands
 
-## Development and trying changes
-
-| Command | When to use it |
+| Command | Purpose |
 |---|---|
-| `npm run dev` | Try changes right away. Shiftwheel runs from source and **restarts itself every time an app file is saved**. The installed version is closed first (they can't run side by side); reopen it from the Start Menu when you're done. Stop with Ctrl+C or **Quit** in the tray menu. |
-| `npm run install-local` | The changes are good and you want to use them every day. Builds the installer and installs it silently on this PC (~1 minute). The old version is closed, the new one starts in the tray, settings are kept. |
-| `npm test` | `node --check`, CSP hash check, the key-tap tests, and the converter/tools tests. Tests that need LibreOffice/ffmpeg/Poppler/OCR are skipped when the program isn't there. |
-| `npm run dist` | Only builds the installer in `dist/` (for example to install on another PC). |
+| `npm run dev` | Run from source with hot-reload whenever an app file is saved (automatically closes any installed tray instance first). |
+| `npm run install-local` | Build the NSIS installer into `dist/install-<timestamp>` and silently install + launch the updated tray app. |
+| `npm test` | Run `node --check`, verify inline `<script>`/`<style>` CSP SHA-256 hashes, run hotkey state-machine tests, and run converter/tool tests. |
+| `node test/check.js --fix` | Recompute and update the CSP SHA-256 hashes in `overlay.html`, `hud.html`, and `crop.html` after editing inline styles or scripts. |
+| `npm run dist` | Build the standalone Windows installer in `dist/`. |
 
-The loop: edit code → try it with `npm run dev` → `npm test` → commit and push → `npm run install-local`.
+---
 
-If `npm run dist` fails with `EBUSY ... app.asar`, another Electron app (an editor, or Claude desktop with this folder open) is holding `dist/win-unpacked/resources/app.asar`. Close that app or delete `dist/win-unpacked`. `npm run install-local` doesn't hit this because it builds into a fresh `dist/install-<time>` folder each run.
+## Notes & Behavior Details
 
-Run `npm run install-local` from a regular Windows terminal (Windows Terminal, PowerShell, cmd), **not** from a terminal inside the Claude desktop app. Processes started inside Claude desktop are virtualized (MSIX): writes to `%LOCALAPPDATA%`/`%APPDATA%` are redirected to Claude's private folder, so Shiftwheel would be installed somewhere Windows can't see.
-
-After editing the `<style>` or `<script>` in `overlay.html`, `hud.html`, or `crop.html`, update the CSP hashes with `node test/check.js --fix` (if you forget, the overlay renders unstyled and `npm test` fails).
-
-Categories and target formats live in one place: `CATEGORIES` in `converter.js`. Tools are in `TOOLS` in `tools.js`, file actions in `ACTIONS` in `main.js`. The wheels are built from those three.
-
-The icon is drawn in code by `scripts/make-ico.js`: a black tile with a white wheel that has one lit segment. The script writes `assets/icon.svg`, `assets/icon.png`, the tray icons `assets/tray-16/24/32.png`, and `build/icon.ico` (16–256 px). Sizes ≤ 32 px use a bolder 4-segment version so they stay crisp. `npm run dist` runs it automatically.
-
-## Convert wheel (Shift)
-
-| File type | From | To | Using |
-|---|---|---|---|
-| Images | png, jpg, webp, gif, tiff, avif, bmp, heic, svg | JPG, PNG, WEBP, AVIF, TIFF, GIF, BMP, PDF, TXT | sharp, pdf-lib, Windows OCR (BMP/HEIC through ffmpeg) |
-| PDF | pdf | DOCX, TXT, JPG, PNG | LibreOffice, pdftoppm |
-| Documents | doc, docx, odt, rtf, txt, html | PDF, DOCX, ODT, RTF, TXT, HTML | LibreOffice |
-| Spreadsheets | xls, xlsx, ods, csv | PDF, XLSX, ODS, CSV | LibreOffice |
-| Presentations | ppt, pptx, odp | PDF, PPTX, ODP | LibreOffice |
-| Audio | mp3, m4a, wav, flac, ogg, opus, aiff, wma, aac | MP3, M4A, WAV, FLAC, OGG, OPUS, AIFF | ffmpeg |
-| Video | mp4, mov, mkv, webm, avi, wmv, m4v | MP4, MOV, MKV, WEBM, GIF, MP3 | ffmpeg |
-
-- Image → JPG: follows EXIF orientation, transparency becomes white, quality 92. GIF ↔ WEBP animation is kept.
-- Image → TXT: text is read with Windows' built-in OCR, offline. Small images are upscaled 2× first so small text reads. Images without writing are rejected instead of producing an empty file.
-- Image → PDF: one page 595 pt wide (A4), height following the image's aspect ratio.
-- PDF → JPG/PNG: every page at 150 DPI. A single page becomes `name.jpg`; several pages become `name 1.jpg`, `name 2.jpg`, and so on.
-- PDF → TXT: LibreOffice imports a PDF as text frames that a normal TXT export ignores, so Shiftwheel reads the text through FODT and sorts it by position on the page. Ordinary text comes out clean; column/table layouts become rows read left → right. Scanned or photographed PDFs (no text layer) are read with Windows OCR automatically: each page is rendered at 200 DPI and recognized, with a blank line between pages.
-- PDF → DOCX: text lands in one text box per line (that's how LibreOffice imports PDFs), so it's readable and editable but doesn't flow like a normal Word document.
-- Video → MP4/MOV/MKV: H.264 + AAC (CRF 20). WEBM: VP9 + Opus. GIF: 12 fps, max 480 px wide.
-- Files already in the target format are skipped ("Already a X file").
-- Results never overwrite another file: `name.pdf`, then `name (1).pdf`, `name (2).pdf`, and so on.
-
-## Tools wheel (Ctrl)
-
-Results are saved as new files, for example `photo (compressed).jpg`. The original is never changed.
-
-| File type | Tools |
-|---|---|
-| Images | **Compress** (max 2560 px, quality ~75; skipped if the result isn't smaller), **50%**, **Rotate** 90°, **Grayscale**, **Metadata** (remove EXIF/location), **Mirror**, **Crop** (opens an editor: drag a selection, pick Free/1:1/4:3/3:2/16:9/9:16, Enter to save; with several images the same crop is applied to all), **Trim edges** (cut away plain borders; skipped when there are none), **Square** 1:1 (smart crop around the most salient part), **Merge PDF** (2+ images into `Merged.pdf`) |
-| PDF | **Merge** (2+ PDFs into `Merged.pdf`), **Split** into pages (`name page 1.pdf`, …), **Rotate** every page 90°, **Metadata** (remove title/author/XMP), **Page numbers** ("1 / 5" at the bottom of each page), **Reverse** page order |
-| Video | **Compress** (max 1080p, CRF 28), **720p**, **Mute**, **Rotate** 90°, **Thumbnail** (JPG from the middle of the video), **2× speed** |
-| Audio | **Compress** (128 kbps MP3), **Normalize** (loudnorm −16 LUFS), **Mono**, **Denoise** (afftdn), **Trim silence** at the start/end, **1.5× speed** (same pitch), **Fade** in/out |
-| Documents, spreadsheets, presentations | **Merge PDF** (2+ files into one `Merged.pdf`), **Pages / Slides** (every page as a PNG) |
-
-The document/spreadsheet/presentation tools use LibreOffice; "Pages" also needs Poppler.
-
-## File actions wheel (Alt)
-
-Works on any file, including folders and mixed selections:
-
-- **Copy path**: the full path to the clipboard as text, one line per item.
-- **Copy**: the files to the clipboard, ready to paste in Explorer.
-- **Copy to / Move to**: pick a destination folder. Clashing names become `name (1)`.
-- **Terminal**: open the folder (or the file's folder) in Windows Terminal, or Command Prompt if Windows Terminal isn't installed.
-- **Explorer**: show the item in Explorer.
-
-## Notes
-
-- **Drag detection is a heuristic.** Windows has no global API for "a file is being dragged". Shiftwheel assumes a drag is happening when the left mouse button is held and the cursor has moved more than about 20 px. The wheel can also open if you tap Shift/Ctrl/Alt while selecting text or moving a window. It closes when you release the mouse or press Esc, and nothing is processed unless a file is dropped.
-- **The wheel only opens when the key is tapped *during* the drag.** Holding Ctrl/Shift before you start dragging (the usual Explorer copy/move habit) doesn't open it. A tap right as the drag starts, before the cursor has moved far enough, waits up to 1.5 s for the drag to begin instead of being ignored.
-- **Taps survive lost key events.** Windows sometimes never delivers a key-up (Shift pressed on one side and released on the other, Alt+Tab). Shiftwheel treats a key as a new tap unless it repeated within the last 600 ms, so a lost key-up can never lock the wheel shut (see `hotkeys.js` and `test/hotkeys.test.js`).
-- **The wheel's contents are guessed from the MIME type** Windows provides when the file enters the wheel. For extensions Windows doesn't know, the convert wheel shows common formats (PDF, DOCX, TXT, JPG, PNG, MP3, MP4). The final check still uses the file extension, so a mismatched choice is rejected with a clear message.
-- **Alt** during a drag sometimes makes the active app (e.g. Explorer) highlight its menu bar after the drop. Press Alt or Esc once more to dismiss it.
-- **HEIC** is read through ffmpeg and hasn't been tested with real iPhone photos.
-- **Doesn't work over Administrator windows.** A global hook from a regular app gets no input while the cursor is over a window running as Administrator (a Windows UIPI restriction).
-- **SmartScreen warning.** The installer isn't code-signed, so Windows shows "Windows protected your PC". Click **More info** → **Run anyway**.
-- **Antivirus.** Some antivirus products may be suspicious of a global keyboard/mouse hook. Shiftwheel's hook only reads Shift, Ctrl, Alt, Esc, and the left mouse button plus the cursor position. It doesn't record keystrokes, store any input, or access the network.
-- **The context menu on Windows 11** is under "Show more options" (the classic menu), because the new Windows 11 menu is only for apps packaged with an MSIX identity.
-- Shift or Ctrl during a drag tells Explorer it's a "move" or "copy". Shiftwheel always answers "copy", so the original file is never moved or deleted by dropping it on the wheel.
+- **Drag Detection**: Because Windows does not expose a global event for "an Explorer file drag started", Shiftwheel detects when a mouse button is held, the cursor moves at least 4 DIP (matching Explorer's drag threshold), and you tap **Shift**, **Ctrl**, or **Alt**.
+- **Modifier Hold vs. Tap**: Holding `Ctrl` or `Shift` *before* starting a drag (standard Explorer copy/move behavior) will not trigger the wheel unless you tap the key cleanly or press it during the drag.
+- **Resilient Key Tracking**: Windows occasionally drops `keyup` events (e.g. pressing Left Shift and releasing Right Shift, or `Alt+Tab`). Shiftwheel's state machine in `hotkeys.js` automatically recovers from lost key-ups and self-heals the global hook after sleep or screen lock.
+- **Administrator Windows**: Due to Windows UIPI security restrictions, a non-elevated tray app cannot receive input hooks while the cursor is hovering over a window running as Administrator.
+- **Non-Destructive Drop**: Even though tapping `Shift` tells Explorer to show a "Move" cursor badge, Shiftwheel always sets `dropEffect = 'copy'` so your original file is never moved or deleted when dropped on the wheel.
