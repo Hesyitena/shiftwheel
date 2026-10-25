@@ -27,6 +27,8 @@
 
 ; Explorer context menu: "Convert with Shiftwheel" > PDF / DOCX / TXT / JPG
 !macro customInstall
+  WriteRegStr HKCU "Software\Classes\.md" "Content Type" "text/markdown"
+  WriteRegStr HKCU "Software\Classes\.markdown" "Content Type" "text/markdown"
   WriteRegStr HKCU "${SW_MENU_KEY}" "MUIVerb" "Convert with Shiftwheel"
   WriteRegStr HKCU "${SW_MENU_KEY}" "Icon" '"$INSTDIR\${APP_EXECUTABLE_FILENAME}",0'
   WriteRegStr HKCU "${SW_MENU_KEY}" "SubCommands" ""

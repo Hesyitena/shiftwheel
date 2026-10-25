@@ -29,7 +29,7 @@ Jobs that take longer than 600 ms show a small progress card in the bottom-right
 |---|---|---|---|
 | Images | `png` `jpg` `webp` `gif` `tiff` `avif` `bmp` `heic` `svg` | `JPG` `PNG` `WEBP` `AVIF` `TIFF` `GIF` `BMP` `PDF` `TXT` | `sharp`, `pdf-lib`, Windows OCR (`bmp`/`heic` via `ffmpeg`) |
 | PDF | `pdf` | `DOCX` `TXT` `JPG` `PNG` | LibreOffice, `pdftoppm`, Windows OCR |
-| Documents | `doc` `docx` `odt` `rtf` `txt` `html` | `PDF` `DOCX` `ODT` `RTF` `TXT` `HTML` | LibreOffice |
+| Documents | `doc` `docx` `odt` `rtf` `txt` `html` `md` | `PDF` `DOCX` `ODT` `RTF` `TXT` `HTML` | LibreOffice |
 | Spreadsheets | `xls` `xlsx` `ods` `csv` | `PDF` `XLSX` `ODS` `CSV` | LibreOffice |
 | Presentations | `ppt` `pptx` `odp` | `PDF` `PPTX` `ODP` | LibreOffice |
 | Audio | `mp3` `m4a` `wav` `flac` `ogg` `opus` `aiff` `wma` `aac` | `MP3` `M4A` `WAV` `FLAC` `OGG` `OPUS` `AIFF` | `ffmpeg` |

@@ -21,7 +21,7 @@ const pdfLib = () => require('pdf-lib');
 const CATEGORIES = {
   image: { name: 'Images', exts: ['png', 'jpg', 'webp', 'gif', 'tiff', 'avif', 'bmp', 'heic', 'svg'], targets: ['jpg', 'png', 'webp', 'avif', 'tiff', 'gif', 'bmp', 'pdf', 'txt'] },
   pdf: { name: 'PDFs', exts: ['pdf'], targets: ['docx', 'txt', 'jpg', 'png'] },
-  document: { name: 'Documents', exts: ['doc', 'docx', 'odt', 'rtf', 'txt', 'html'], targets: ['pdf', 'docx', 'odt', 'rtf', 'txt', 'html'] },
+  document: { name: 'Documents', exts: ['doc', 'docx', 'odt', 'rtf', 'txt', 'html', 'md'], targets: ['pdf', 'docx', 'odt', 'rtf', 'txt', 'html'] },
   sheet: { name: 'Spreadsheets', exts: ['xls', 'xlsx', 'ods', 'csv'], targets: ['pdf', 'xlsx', 'ods', 'csv'] },
   slides: { name: 'Presentations', exts: ['ppt', 'pptx', 'odp'], targets: ['pdf', 'pptx', 'odp'] },
   audio: { name: 'Audio files', exts: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff', 'wma', 'aac'], targets: ['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff'] },
@@ -29,7 +29,7 @@ const CATEGORIES = {
 };
 // Wheel shown when the file type is unknown (Windows doesn't always give a MIME type): common formats
 const FALLBACK_TARGETS = ['pdf', 'docx', 'txt', 'jpg', 'png', 'mp3', 'mp4'];
-const ALIAS = { jpeg: 'jpg', tif: 'tiff', htm: 'html', aif: 'aiff', heif: 'heic' };
+const ALIAS = { jpeg: 'jpg', tif: 'tiff', htm: 'html', markdown: 'md', mdown: 'md', aif: 'aiff', heif: 'heic' };
 
 // LibreOffice export filter per target format
 const LO_FILTER = {
@@ -302,21 +302,145 @@ function fodtToText(xml) {
   return out.join('\n');
 }
 
+// Convert Markdown (.md) to a styled standalone HTML document so LibreOffice imports headings, tables,
+// code blocks, lists, and inline formatting as real document styles instead of raw plain text.
+function mdToHtml(md, title = 'Document') {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const slots = [];
+  const hold = (html) => `\x00S${slots.push(html) - 1}\x00`;
+  const restore = (s) => s.replace(/\x00S(\d+)\x00/g, (_, i) => slots[Number(i)]);
+
+  const inline = (raw) => {
+    let s = String(raw).replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`));
+    s = esc(s);
+    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img alt="$1" src="$2">');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+    s = s.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/__(.+?)__/g, '<strong>$1</strong>');
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+    s = s.replace(/(^|\W)_(.+?)_(?=\W|$)/g, '$1<em>$2</em>');
+    s = s.replace(/~~(.+?)~~/g, '<s>$1</s>');
+    return restore(s);
+  };
+
+  const lines = String(md || '').replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').split('\n');
+  const blocks = [];
+  const splitRow = (r) => r.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  const isSep = (r) => /^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$/.test(r.trim());
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) continue;
+
+    const fence = /^(`{3,}|~{3,})/.exec(line.trim());
+    if (fence) {
+      const code = [];
+      for (i++; i < lines.length && !lines[i].trim().startsWith(fence[1]); i++) code.push(esc(lines[i]));
+      blocks.push(`<pre><code>${code.join('\n')}</code></pre>`);
+      continue;
+    }
+
+    const h = /^(#{1,6})\s+(.+?)\s*#*$/.exec(line);
+    if (h) {
+      blocks.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`);
+      continue;
+    }
+
+    if (/^(?:-\s*){3,}$|^(?:\*\s*){3,}$|^(?:_\s*){3,}$/.test(line.trim())) {
+      blocks.push('<hr>');
+      continue;
+    }
+
+    if (line.includes('|') && i + 1 < lines.length && isSep(lines[i + 1])) {
+      const head = splitRow(line);
+      const aligns = splitRow(lines[++i]).map((c) => (c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left'));
+      const rows = [];
+      while (i + 1 < lines.length && lines[i + 1].includes('|') && lines[i + 1].trim()) rows.push(splitRow(lines[++i]));
+      const th = head.map((c, j) => `<th align="${aligns[j] || 'left'}">${inline(c)}</th>`).join('');
+      const tr = rows.map((r) => `<tr>${head.map((_, j) => `<td align="${aligns[j] || 'left'}">${inline(r[j] ?? '')}</td>`).join('')}</tr>`).join('');
+      blocks.push(`<table><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table>`);
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const quote = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) quote.push(inline(lines[i++].replace(/^\s*>\s?/, '')));
+      i--;
+      blocks.push(`<blockquote><p>${quote.join('<br>')}</p></blockquote>`);
+      continue;
+    }
+
+    const listMatch = /^\s*([-*+]|\d+\.)\s+/.exec(line);
+    if (listMatch) {
+      const ordered = /\d+\./.test(listMatch[1]);
+      const tag = ordered ? 'ol' : 'ul';
+      const items = [];
+      while (i < lines.length && (ordered ? /^\s*\d+\.\s+/ : /^\s*[-*+]\s+/).test(lines[i])) {
+        const rawItem = lines[i++].replace(/^\s*(?:[-*+]|\d+\.)\s+/, '')
+          .replace(/^\[x\]\s+/i, '&#9745; ').replace(/^\[\s\]\s+/, '&#9744; ');
+        items.push(`<li>${inline(rawItem)}</li>`);
+      }
+      i--;
+      blocks.push(`<${tag}>${items.join('')}</${tag}>`);
+      continue;
+    }
+
+    const para = [inline(line.trim())];
+    while (
+      i + 1 < lines.length && lines[i + 1].trim() &&
+      !/^(`{3,}|~{3,}|#{1,6}\s|>\s?|[-*+]\s|\d+\.\s|(?:-\s*){3,}$|(?:\*\s*){3,}$|(?:_\s*){3,}$)/.test(lines[i + 1].trim()) &&
+      !(lines[i + 1].includes('|') && i + 2 < lines.length && isSep(lines[i + 2]))
+    ) {
+      para.push(inline(lines[++i].trim()));
+    }
+    blocks.push(`<p>${para.join(' ')}</p>`);
+  }
+
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${esc(title)}</title>
+<style>
+  body { font-family: "Segoe UI", Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #111; }
+  h1, h2, h3, h4, h5, h6 { margin: 1.1em 0 0.4em; line-height: 1.25; }
+  h1 { font-size: 20pt; } h2 { font-size: 15pt; } h3 { font-size: 12.5pt; }
+  p, ul, ol, blockquote, pre, table { margin: 0 0 0.8em; }
+  code { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; background: #f3f3f5; padding: 1px 4px; }
+  pre { font-family: Consolas, "Courier New", monospace; font-size: 9.5pt; background: #f3f3f5; padding: 10px; border: 1px solid #e1e1e6; white-space: pre-wrap; }
+  pre code { background: none; padding: 0; }
+  blockquote { border-left: 3px solid #ccc; padding-left: 10px; color: #555; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 6px 8px; }
+  th { background: #f3f3f5; font-weight: bold; }
+  a { color: #0066cc; }
+</style></head><body>
+${blocks.join('\n')}
+</body></html>\n`;
+}
+
 async function viaLibreOffice(input, out, fmt) {
+  const src = extOf(input);
+  if (src === 'md' && fmt === 'html') {
+    fs.writeFileSync(out, mdToHtml(fs.readFileSync(input, 'utf8'), baseOf(input)));
+    return;
+  }
   // Separate profile so it never clashes with a LibreOffice window the user has open
   const profile = pathToFileURL(path.join(os.tmpdir(), 'shiftwheel-lo-profile')).href;
-  const src = extOf(input);
   const infilter = src === 'pdf' ? 'writer_pdf_import' : src === 'csv' ? 'CSV:44,34,76' : null;
   const pdfText = src === 'pdf' && fmt === 'txt';
   const ext = pdfText ? 'fodt' : fmt;
   await withTmpDir(async (tmp) => {
+    let loInput = input;
+    if (src === 'md') {
+      loInput = path.join(tmp, 'input.html');
+      fs.writeFileSync(loInput, mdToHtml(fs.readFileSync(input, 'utf8'), baseOf(input)));
+    }
     const args = [
       `-env:UserInstallation=${profile}`,
       '--headless', '--norestore', '--nolockcheck',
       ...(infilter ? [`--infilter=${infilter}`] : []),
       '--convert-to', pdfText ? 'fodt' : LO_FILTER[fmt],
       '--outdir', tmp,
-      input,
+      loInput,
     ];
     // Retry once: LibreOffice's first start (creating its profile) or a profile in use by another
     // process sometimes fails for no clear reason; the second attempt usually works.

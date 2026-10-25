@@ -119,6 +119,16 @@ const ff = (...args) => execFileSync(findTool('ffmpeg'), ['-hide_banner', '-logl
   await test('docx -> odt', async () => startsWith(await convert(p('notes.docx'), 'odt'), ZIP), noLo);
   await test('docx -> rtf', async () => ascii(await convert(p('notes.docx'), 'rtf'), '{\\rtf'), noLo);
   await test('docx -> html', async () => assert.match(fs.readFileSync(await convert(p('notes.docx'), 'html'), 'utf8'), /Hello Shiftwheel/), noLo);
+  await test('md -> html, pdf, docx, txt (formatted Markdown)', async () => {
+    fs.writeFileSync(p('readme.md'), '# Heading 1\n\nParagraph with **bold** and `code`.\n\n| A | B |\n|---|---|\n| 1 | 2 |\n');
+    const html = await convert(p('readme.md'), 'html');
+    assert.match(fs.readFileSync(html, 'utf8'), /<h1>Heading 1<\/h1>[\s\S]*<strong>bold<\/strong>[\s\S]*<table>/);
+    if (!noLo) {
+      startsWith(await convert(p('readme.md'), 'pdf'), PDF);
+      startsWith(await convert(p('readme.md'), 'docx'), ZIP);
+      assert.match(fs.readFileSync(await convert(p('readme.md'), 'txt'), 'utf8'), /Heading 1/);
+    }
+  });
   await test('csv -> xlsx -> csv (content unchanged)', async () => {
     const xlsx = await convert(p('table.csv'), 'xlsx');
     startsWith(xlsx, ZIP);
