@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const root = path.join(__dirname, '..');
-const jsFiles = ['main.js', 'preload.js', 'converter.js', 'tools.js', 'scripts/make-ico.js', 'scripts/dev.js', 'scripts/install-local.js', 'hotkeys.js', 'test/hotkeys.test.js', 'test/converter.test.js', 'test/check.js'];
+const jsFiles = ['main.js', 'preload.js', 'converter.js', 'tools.js', 'scripts/make-ico.js', 'scripts/dev.js', 'scripts/install-local.js', 'scripts/prune-pack.js', 'hotkeys.js', 'test/hotkeys.test.js', 'test/converter.test.js', 'test/check.js'];
 let ok = true;
 
 function nodeCheck(file, label) {
@@ -27,9 +27,12 @@ for (const name of ['overlay.html', 'hud.html', 'crop.html']) {
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
   const style = html.match(/<style>([\s\S]*?)<\/style>/)[1];
 
-  const tmp = path.join(os.tmpdir(), `shiftwheel-${name}.js`);
+  const tmpDir = path.join(root, 'dist', '.check');
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const tmp = path.join(tmpDir, `shiftwheel-${name}.js`);
   fs.writeFileSync(tmp, script);
   nodeCheck(tmp, `<script> ${name}`);
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
 
   // Only the hashes are rewritten; other directives (e.g. img-src in crop.html) are kept as written
   const current = html.match(cspRe)[2];

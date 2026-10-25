@@ -33,6 +33,11 @@
       "**/node_modules/@img/**",
       "**/node_modules/uiohook-napi/**"
     ],
+    "compression": "maximum",
+    "electronLanguages": [
+      "en-US"
+    ],
+    "afterPack": "scripts/prune-pack.js",
     "win": {
       "target": "nsis",
       "icon": "build/icon.ico"

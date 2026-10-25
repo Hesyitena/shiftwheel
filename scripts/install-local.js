@@ -10,6 +10,10 @@ const root = path.join(__dirname, '..');
 // another Electron app that has the project folder open (an editor, Claude desktop, etc.). It stays on
 // the project's drive rather than %TEMP%, so a full C: drive doesn't break the build.
 const out = path.join(root, 'dist', `install-${Date.now()}`);
+const tmpDir = path.join(root, 'dist', '.tmp');
+fs.mkdirSync(tmpDir, { recursive: true });
+process.env.TEMP = tmpDir;
+process.env.TMP = tmpDir;
 const node = (...args) => execFileSync(process.execPath, args, { cwd: root, stdio: 'inherit' });
 
 node(path.join(root, 'scripts', 'make-ico.js'));
