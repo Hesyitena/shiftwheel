@@ -10,7 +10,7 @@ npm run dev          # tauri dev
 npm run build        # release binary
 npm run dist         # NSIS installer
 npm test             # all tests (Rust + UI)
-npm run test:rust    # cargo test (unit + end-to-end job tests)
+npm run test:rust    # cargo test --workspace (unit + end-to-end job tests)
 npm run test:ui      # overlay/HUD/crop pages in Chromium (needs Playwright + Chromium)
 ```
 
@@ -22,8 +22,9 @@ The app targets Windows, but the crate also builds on Linux/macOS (Win32 code is
 - `src-tauri/src/hook.rs` – global `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks. Logic is the pure `Machine`; the hook procedures only feed it and send events through a channel.
 - `src-tauri/src/wheel.rs` – which slices a selection gets (`items_for`) and hit-testing (`resolve`). The overlay draws exactly this list.
 - `src-tauri/src/jobs.rs` – job queue (one worker thread), `run_job`, progress/result messages, the `Ui` trait.
-- `src-tauri/src/converter.rs` – conversions and tools. `imaging.rs` (load with EXIF / save per format / PDF from images), `pdfops.rs` (lopdf merge/split/compress), `fodt.rs` (PDF text via LibreOffice), `external.rs` (finding and running ffmpeg/soffice/pdftoppm without console windows).
-- `src-tauri/src/actions.rs` – clipboard, copy/move to folder (recursive), terminal, reveal in Explorer.
+- `src-tauri/src/converter.rs` – conversions and tools. `imaging.rs` (ffmpeg fallback around `imgcore`), `pdfops.rs` (lopdf merge/split/compress), `fodt.rs` (PDF text via LibreOffice), `external.rs` (finding and running ffmpeg/soffice/pdftoppm without console windows).
+- `src-tauri/imgcore/` – workspace crate with the CPU-heavy image work (decode with EXIF, encode to memory, image PDFs, trim). Built with `opt-level = 3` while the app is built for size; keep generic `image` calls (encoders, pixel loops) in here, or they get compiled at the app's size-optimized level.
+- `src-tauri/src/actions.rs` – clipboard, copy/move to folder (recursive), native folder picker, terminal, reveal in Explorer, `write_unique`.
 - `src-tauri/src/window_manager.rs` – overlay/HUD placement in physical pixels using the target monitor's DPI and work area.
 - `src-tauri/src/config.rs` – wheel contents (`convert:<fmt>`, `tool:<cat>.<id>`, `action:<id>`).
 - `src-tauri/src/e2e.rs` – end-to-end tests: drop position → slice → job with real helper programs → output checked; IPC contract tests.
@@ -34,7 +35,9 @@ The app targets Windows, but the crate also builds on Linux/macOS (Win32 code is
 
 - Wheel geometry (center 180, inner radius 80, outer 146, hit radius 166) lives in `wheel.rs` and `overlay.html::segmentAt`. The UI test checks them point by point against vectors exported from Rust.
 - Every id in `config.rs` needs an implementation (`jobs::known_tool` / `known_action`); a test enforces it.
-- Outputs go next to the source through `actions::unique_path`. Never overwrite the source or an existing file (LibreOffice writes into a temp folder first for this reason).
+- Outputs go next to the source through `actions::write_unique` (claims the name with create-new, so parallel jobs can't collide). Never overwrite the source or an existing file (LibreOffice writes into a temp folder first for this reason).
+- Batches of pure image work run on up to 4 threads (`jobs::per_file` with `parallel`); FFmpeg/LibreOffice jobs stay sequential.
+- Release size matters: don't add `opt-level = 3` for the app crate itself (it pulls Tauri's generics along and nearly doubles the exe).
 - The hook procedures run inside Windows' input pipeline: keep them fast, never call into Tauri or block there.
 - Events and commands used by `bridge.js` must exist in Rust; `ipc_names_match_between_bridge_and_backend` checks this.
 - Tray check items are toggled by the menu itself before the event arrives: read `is_checked()`, don't flip it again.

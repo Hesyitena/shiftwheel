@@ -23,6 +23,34 @@ pub fn unique_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
     candidate
 }
 
+/// Serializes name picking so parallel jobs never choose the same free name.
+static NAME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Write `bytes` to a free `dir/stem.ext` (or `stem (1).ext`, ...) and return the path.
+/// The name is claimed with create-new, so neither another job nor another program can grab it
+/// between choosing and writing.
+pub fn write_unique(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+    use std::io::Write;
+    let (path, mut file) = {
+        let _guard = NAME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut tries = 0;
+        loop {
+            let path = unique_path(dir, stem, ext);
+            match fs::OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(f) => break (path, f),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 100 => tries += 1,
+                Err(e) => return Err(format!("Could not save {}: {e}", path.display())),
+            }
+        }
+    };
+    if let Err(e) = file.write_all(bytes).and_then(|_| file.flush()) {
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(format!("Could not save {}: {e}", path.display()));
+    }
+    Ok(path)
+}
+
 /// Free destination for `src` inside `target_dir`, keeping folder names whole.
 fn destination(src: &Path, target_dir: &Path) -> PathBuf {
     let name = src.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "item".into());
@@ -261,31 +289,47 @@ pub fn reveal_in_explorer(path: &str) -> Result<(), String> {
     }
 }
 
-/// Ask for a target folder. None when the dialog is cancelled.
+/// Ask for a target folder with the native Windows folder picker. `owner` is the window the
+/// dialog belongs to (a top-most one keeps it in front of Explorer). None when cancelled.
 #[cfg(windows)]
-pub fn pick_folder() -> Option<PathBuf> {
-    // -STA is required by the WinForms dialog; the TopMost owner keeps it in front.
-    let script = r#"
-Add-Type -AssemblyName System.Windows.Forms
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-$owner = New-Object System.Windows.Forms.Form -Property @{ TopMost = $true; ShowInTaskbar = $false }
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = "Select target folder"
-$dialog.ShowNewFolderButton = $true
-if ($dialog.ShowDialog($owner) -eq [System.Windows.Forms.DialogResult]::OK) {
-    [Console]::Out.Write($dialog.SelectedPath)
-}
-$owner.Dispose()
-"#;
-    let mut cmd = crate::external::hidden(Command::new("powershell.exe"));
-    cmd.args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script]);
-    let output = crate::external::run(cmd, "Folder picker").ok()?;
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if path.is_empty() { None } else { Some(PathBuf::from(path)) }
+pub fn pick_folder(owner: Option<isize>) -> Option<PathBuf> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx,
+        CoTaskMemFree, CoUninitialize,
+    };
+    use windows::Win32::UI::Shell::{
+        FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
+    };
+    use windows::core::w;
+
+    unsafe {
+        // The dialog needs a single-threaded apartment on this thread.
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        let picked = (|| -> windows::core::Result<Option<PathBuf>> {
+            let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+            dialog.SetOptions(dialog.GetOptions()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST)?;
+            dialog.SetTitle(w!("Select target folder"))?;
+            if dialog.Show(owner.map(|h| HWND(h as *mut _))).is_err() {
+                return Ok(None); // cancelled
+            }
+            let name = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+            let path = name.to_string().ok().map(PathBuf::from);
+            CoTaskMemFree(Some(name.0 as *const _));
+            Ok(path)
+        })();
+        if com.is_ok() {
+            CoUninitialize();
+        }
+        picked.unwrap_or_else(|e| {
+            log::error!("folder picker failed: {e}");
+            None
+        })
+    }
 }
 
 #[cfg(not(windows))]
-pub fn pick_folder() -> Option<PathBuf> {
+pub fn pick_folder(_owner: Option<isize>) -> Option<PathBuf> {
     None
 }
 
@@ -301,6 +345,24 @@ mod tests {
         fs::write(&a, "1").unwrap();
         let b = unique_path(t.path(), "a", "txt");
         assert_eq!(b.file_name().unwrap(), "a (1).txt");
+    }
+
+    #[test]
+    fn write_unique_is_safe_in_parallel() {
+        let t = TempDir::new("wu").unwrap();
+        let dir = t.path();
+        let paths: Vec<PathBuf> = std::thread::scope(|s| {
+            let hs: Vec<_> = (0..16).map(|i| s.spawn(move || write_unique(dir, "x", "txt", format!("{i}").as_bytes()).unwrap())).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        let mut names: Vec<_> = paths.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+        names.sort();
+        names.dedup();
+        assert_eq!(names.len(), 16, "every writer got its own file");
+        let mut contents: Vec<String> = paths.iter().map(|p| fs::read_to_string(p).unwrap()).collect();
+        contents.sort();
+        contents.dedup();
+        assert_eq!(contents.len(), 16, "nothing was overwritten");
     }
 
     #[test]
@@ -380,6 +442,42 @@ mod tests {
             CloseClipboard();
             assert_eq!(names, vec!["C:\\one.txt", "C:\\two words.png"]);
         }
+    }
+
+    /// Opens the real dialog and presses Cancel from another thread.
+    #[cfg(windows)]
+    #[test]
+    fn native_folder_picker_opens_and_cancels() {
+        use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
+        use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, IsWindowVisible, PostMessageW, WM_COMMAND};
+
+        fn press_later(tid: u32, msg: u32, wparam: WPARAM) -> std::thread::JoinHandle<bool> {
+            std::thread::spawn(move || {
+                unsafe extern "system" fn visit(hwnd: HWND, lp: LPARAM) -> i32 {
+                    let (msg, wparam, hit) = unsafe { &mut *(lp as *mut (u32, WPARAM, bool)) };
+                    if unsafe { IsWindowVisible(hwnd) } != 0 {
+                        unsafe { PostMessageW(hwnd, *msg, *wparam, 0) };
+                        *hit = true;
+                    }
+                    1
+                }
+                for _ in 0..100 {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let mut ctx = (msg, wparam, false);
+                    unsafe { EnumThreadWindows(tid, Some(visit), &mut ctx as *mut _ as LPARAM) };
+                    if ctx.2 {
+                        return true;
+                    }
+                }
+                false
+            })
+        }
+
+        let tid = unsafe { GetCurrentThreadId() };
+        let cancel = press_later(tid, WM_COMMAND, 2 /* IDCANCEL */);
+        assert_eq!(pick_folder(None), None, "Cancel returns nothing");
+        assert!(cancel.join().unwrap(), "the dialog was shown");
     }
 
     #[cfg(windows)]

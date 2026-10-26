@@ -99,6 +99,15 @@ impl Ui for TauriUi {
         let _ = self.app.emit("overlay:sound", name);
     }
 
+    /// The progress card is top-most; owning the dialog keeps it in front of Explorer.
+    fn pick_folder(&self) -> Option<PathBuf> {
+        #[cfg(windows)]
+        let owner = self.app.get_webview_window("hud").and_then(|w| w.hwnd().ok()).map(|h| h.0 as isize);
+        #[cfg(not(windows))]
+        let owner = None;
+        actions::pick_folder(owner)
+    }
+
     fn ask_crop(&self, req: CropRequest) -> Option<CropRect> {
         let st = state(&self.app);
         let (tx, rx) = channel();
@@ -343,9 +352,8 @@ pub fn run() {
     tauri::Builder::default()
         .manage(new_state())
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
-            }
+            #[cfg(debug_assertions)]
+            app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
             let handle = app.handle().clone();
             let s = settings::load_settings();
             tray::create_tray(&handle)?;

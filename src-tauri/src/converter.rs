@@ -1,9 +1,9 @@
 //! File conversions and tools. Every function writes new files next to the source and
 //! never overwrites the source or an existing file.
 
-use crate::actions::unique_path;
+use crate::actions::{unique_path, write_unique};
 use crate::external::{self, Program, TempDir};
-use crate::imaging::{self, images_to_pdf, load_image, save_image, save_image_with};
+use crate::imaging::{self, encode_image, load_image};
 use crate::pdfops;
 use image::DynamicImage;
 use std::path::{Path, PathBuf};
@@ -75,12 +75,15 @@ fn parts(src: &Path) -> (PathBuf, String) {
     (dir, stem)
 }
 
-/// Move a finished temp file to a free name in `dir`.
+/// Move a finished temp file to a free name in `dir` (the name is claimed first, then replaced).
 fn move_into(tmp: &Path, dir: &Path, stem: &str, ext: &str) -> Result<PathBuf, String> {
-    let out = unique_path(dir, stem, ext);
+    let out = write_unique(dir, stem, ext, &[])?;
     if std::fs::rename(tmp, &out).is_err() {
         // Different drive than the temp folder: copy instead.
-        std::fs::copy(tmp, &out).map_err(|e| format!("Could not save {}: {e}", out.display()))?;
+        if let Err(e) = std::fs::copy(tmp, &out) {
+            let _ = std::fs::remove_file(&out);
+            return Err(format!("Could not save {}: {e}", out.display()));
+        }
         let _ = std::fs::remove_file(tmp);
     }
     Ok(out)
@@ -120,19 +123,12 @@ pub fn convert_file(src: &Path, target: &str) -> Result<Vec<PathBuf>, String> {
 
 fn convert_image(src: &Path, dir: &Path, stem: &str, target: &str) -> Result<Vec<PathBuf>, String> {
     let img = load_image(src)?;
-    match target {
-        "pdf" => {
-            let out = unique_path(dir, stem, "pdf");
-            images_to_pdf(std::slice::from_ref(&img), &out)?;
-            Ok(vec![out])
-        }
-        "txt" => ocr_to_txt(&img, dir, stem).map(|p| vec![p]),
-        _ => {
-            let out = unique_path(dir, stem, target);
-            save_image(&img, &out)?;
-            Ok(vec![out])
-        }
-    }
+    let bytes = match target {
+        "pdf" => imaging::pdf_from_images(std::slice::from_ref(&img))?,
+        "txt" => return ocr_to_txt(&img, dir, stem).map(|p| vec![p]),
+        _ => encode_image(&img, target, imaging::JPEG_QUALITY, false)?,
+    };
+    Ok(vec![write_unique(dir, stem, target, &bytes)?])
 }
 
 fn ffmpeg_base() -> Result<Command, String> {
@@ -379,27 +375,27 @@ fn ocr_to_txt(img: &DynamicImage, dir: &Path, stem: &str) -> Result<PathBuf, Str
     if text.trim().is_empty() {
         return Err("No text found in this image".into());
     }
-    let out = unique_path(dir, stem, "txt");
-    std::fs::write(&out, text.trim_end().to_string() + "\n").map_err(|e| e.to_string())?;
-    Ok(out)
+    write_unique(dir, stem, "txt", (text.trim_end().to_string() + "\n").as_bytes())
 }
 
 // ---------------------------------------------------------------------------------------------
 // Tools
 // ---------------------------------------------------------------------------------------------
 
-/// Output path for an image tool: same format as the source when we can write it, PNG otherwise.
-fn image_tool_out(src: &Path, suffix: &str) -> PathBuf {
-    let (dir, stem) = parts(src);
+/// Output format for an image tool: the source format when we can write it, PNG otherwise.
+fn image_tool_ext(src: &Path) -> String {
     let ext = ext_of(src);
-    let ext = if native_image_ext(&ext) { ext } else { "png".into() };
-    unique_path(&dir, &format!("{stem} ({suffix})"), &ext)
+    if native_image_ext(&ext) { ext } else { "png".into() }
+}
+
+fn write_tool_output(src: &Path, suffix: &str, ext: &str, bytes: &[u8]) -> Result<Outcome, String> {
+    let (dir, stem) = parts(src);
+    Ok(Outcome::Files(vec![write_unique(&dir, &format!("{stem} ({suffix})"), ext, bytes)?]))
 }
 
 fn save_tool_image(img: &DynamicImage, src: &Path, suffix: &str) -> Result<Outcome, String> {
-    let out = image_tool_out(src, suffix);
-    save_image(img, &out)?;
-    Ok(Outcome::Files(vec![out]))
+    let ext = image_tool_ext(src);
+    write_tool_output(src, suffix, &ext, &encode_image(img, &ext, imaging::JPEG_QUALITY, false)?)
 }
 
 fn file_size(p: &Path) -> u64 {
@@ -413,13 +409,12 @@ fn compress_image(src: &Path) -> Result<Outcome, String> {
     if img.width().max(img.height()) > 2560 {
         img = img.resize(2560, 2560, image::imageops::FilterType::Lanczos3);
     }
-    let out = image_tool_out(src, "compressed");
-    save_image_with(&img, &out, 80, true)?;
-    if file_size(&out) >= file_size(src) {
-        let _ = std::fs::remove_file(&out);
+    let ext = image_tool_ext(src);
+    let bytes = encode_image(&img, &ext, 80, true)?;
+    if bytes.len() as u64 >= file_size(src) {
         return Ok(Outcome::Skipped(ALREADY_SMALL.into()));
     }
-    Ok(Outcome::Files(vec![out]))
+    write_tool_output(src, "compressed", &ext, &bytes)
 }
 
 /// Media duration in seconds (ffprobe).
@@ -598,9 +593,8 @@ pub fn images_to_combined_pdf(paths: &[PathBuf]) -> Result<Outcome, String> {
     let first = paths.first().ok_or("No files selected")?;
     let images = paths.iter().map(|p| load_image(p)).collect::<Result<Vec<_>, _>>()?;
     let (dir, stem) = parts(first);
-    let out = unique_path(&dir, &format!("{stem} (combined)"), "pdf");
-    images_to_pdf(&images, &out)?;
-    Ok(Outcome::Files(vec![out]))
+    let pdf = imaging::pdf_from_images(&images)?;
+    Ok(Outcome::Files(vec![write_unique(&dir, &format!("{stem} (combined)"), "pdf", &pdf)?]))
 }
 
 pub fn merge_pdfs(paths: &[PathBuf]) -> Result<Outcome, String> {

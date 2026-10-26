@@ -20,7 +20,7 @@
 
 Tap another key mid-drag to switch wheels. Drop on the center hole, release outside the wheel, or press <kbd>Esc</kbd> to cancel. Output files are saved next to the original (`report.pdf`, `photo (compressed).jpg`, `name (1).ext`) — originals are never modified or overwritten.
 
-Every job shows a small progress card in the bottom-right corner (above the taskbar). When it finishes, the card says what was saved — or why it failed — and clicking it highlights the new file in Explorer. Jobs run one after another, so dropping more files while one is running simply queues them.
+Every job shows a small progress card in the bottom-right corner (above the taskbar). When it finishes, the card says what was saved — or why it failed — and clicking it highlights the new file in Explorer. Jobs run one after another, so dropping more files while one is running simply queues them; within a job, batches of images are processed on several cores.
 
 ---
 
@@ -65,7 +65,7 @@ Works on files, folders, or mixed selections:
 
 - **Copy path** — full path(s) to the clipboard as text, one per line.
 - **Copy** — puts the files on the Windows clipboard (`CF_HDROP`), ready to paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>.
-- **Copy to / Move to** — pick a target folder; name collisions get `(1)`, `(2)`.
+- **Copy to / Move to** — pick a target folder in the standard Windows folder dialog; name collisions get `(1)`, `(2)`.
 - **Terminal** — opens the folder in Windows Terminal (`wt.exe`), or `cmd.exe` if unavailable.
 - **Explorer** — highlights the item in File Explorer.
 

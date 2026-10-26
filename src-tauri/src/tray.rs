@@ -39,7 +39,7 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, Box<dyn std::error::Erro
     let autostart_clone = autostart_item.clone();
 
     let tray = TrayIconBuilder::new()
-        .icon(app.default_window_icon().cloned().ok_or("missing app icon")?)
+        .icon(tauri::image::Image::from_bytes(include_bytes!("../../assets/tray-32.png"))?)
         .tooltip("Shiftwheel")
         .menu(&menu)
         .show_menu_on_left_click(true)

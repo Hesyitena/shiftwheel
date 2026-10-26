@@ -144,7 +144,7 @@ fn test_png(dir: &Path, name: &str, w: u32, h: u32) -> PathBuf {
 /// A JPEG of `w`×`h` stored pixels with EXIF orientation 6 ("rotate 90° clockwise to view").
 fn rotated_jpeg(dir: &Path, w: u32, h: u32) -> PathBuf {
     let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(w, h, image::Rgb([200, 30, 30])));
-    let jpeg = crate::imaging::encode_jpeg(&img, 90).unwrap();
+    let jpeg = imgcore::encode_jpeg(&img, 90).unwrap();
     // APP1 Exif: big-endian TIFF with one IFD entry, Orientation (0x0112) = 6.
     let tiff: Vec<u8> = [
         &b"MM\x00\x2a\x00\x00\x00\x08"[..],
@@ -748,4 +748,62 @@ fn ipc_commands_accept_what_bridge_sends() {
     call("hud_reveal", json!({})).unwrap();
 
     assert!(call("overlay_drop", json!({})).is_err(), "removed command must not exist");
+}
+
+#[test]
+fn e2e_parallel_batch_keeps_names_and_order() {
+    let t = TempDir::new("e2e-par").unwrap();
+    let mut files = Vec::new();
+    for i in 0..6 {
+        files.push(test_png(t.path(), &format!("img{i}.png"), 300 + i * 10, 200));
+    }
+    // Same stem, different format: both become "same.webp" -> one must get "(1)".
+    let same_png = test_png(t.path(), "same.png", 50, 40);
+    let same_bmp = t.path().join("same.bmp");
+    image::open(&same_png).unwrap().save(&same_bmp).unwrap();
+    files.push(same_png);
+    files.push(same_bmp);
+    let broken = t.path().join("broken.png");
+    fs::write(&broken, b"nope").unwrap();
+    files.insert(3, broken);
+
+    let refs: Vec<&Path> = files.iter().map(|p| p.as_path()).collect();
+    let ui = RecUi::default();
+    let r = drop_on("convert", "convert:webp", &refs, &ui);
+    assert_eq!(r.outputs.len(), 8, "{:?}", r.errors);
+    assert_eq!(r.errors.len(), 1);
+    assert!(r.errors[0].starts_with("broken.png:"), "{:?}", r.errors);
+    let names: Vec<String> = r.outputs.iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+    assert_eq!(&names[..6], ["img0.webp", "img1.webp", "img2.webp", "img3.webp", "img4.webp", "img5.webp"], "selection order kept");
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert!(sorted.contains(&"same.webp".to_string()) && sorted.contains(&"same (1).webp".to_string()), "{names:?}");
+    for (out, src) in r.outputs.iter().zip(files.iter().filter(|p| !p.ends_with("broken.png"))) {
+        let a = image::open(out).unwrap();
+        let b = image::open(src).unwrap();
+        assert_eq!((a.width(), a.height()), (b.width(), b.height()), "{} vs {}", out.display(), src.display());
+    }
+    // Progress went from 1 to 9 without going backwards.
+    let idx: Vec<usize> = ui.hud.lock().unwrap().iter().map(|m| m.index).collect();
+    assert!(idx.windows(2).all(|w| w[0] <= w[1]) && *idx.last().unwrap() == 9, "{idx:?}");
+    assert_eq!(r.final_msg.unwrap().label, "Convert to WEBP · 1 of 9 failed");
+}
+
+/// `cargo test --release --lib bench_batch -- --ignored --nocapture`
+#[test]
+#[ignore]
+fn bench_batch_sequential_vs_parallel() {
+    let t = TempDir::new("bench-batch").unwrap();
+    let files: Vec<PathBuf> = (0..8).map(|i| test_png(t.path(), &format!("p{i}.png"), 4000, 3000)).collect();
+    let paths: Vec<String> = files.iter().map(|p| p.to_string_lossy().to_string()).collect();
+    let start = std::time::Instant::now();
+    for p in &files {
+        crate::converter::convert_file(p, "jpg").unwrap();
+    }
+    let seq = start.elapsed();
+    let start = std::time::Instant::now();
+    let r = run_job("convert:jpg", &paths, &RecUi::default());
+    let par = start.elapsed();
+    assert_eq!(r.outputs.len(), 8);
+    eprintln!("BENCH 8 x 12 MP PNG->JPG: sequential {seq:?} | job (parallel) {par:?} | cores {:?}", std::thread::available_parallelism());
 }

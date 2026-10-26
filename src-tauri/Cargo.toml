@@ -6,6 +6,9 @@ authors = ["Shiftwheel"]
 edition = "2024"
 rust-version = "1.90"
 
+[workspace]
+members = ["imgcore"]
+
 [lib]
 name = "app_lib"
 crate-type = ["rlib"]
@@ -20,12 +23,14 @@ log = "0.4"
 tauri = { version = "2.12.5", features = ["tray-icon", "image-png", "image-ico"] }
 tauri-plugin-log = "2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "tiff", "gif"] }
+imgcore = { path = "imgcore" }
 lopdf = { version = "0.46.0", default-features = false }
 
 [dev-dependencies]
 tauri = { version = "2.12.5", features = ["tray-icon", "image-png", "image-ico", "test"] }
 
 [target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
@@ -41,7 +46,6 @@ windows-sys = { version = "0.61", features = [
 
 [profile.dev]
 debug = 0
-incremental = false
 
 [profile.release]
 opt-level = "z"
@@ -49,3 +53,53 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# Image decoding/encoding is CPU-bound: optimize those crates for speed, the rest for size.
+# (Not the app crate itself: that pulls Tauri's generic code to opt-level 3 and nearly doubles the exe.)
+[profile.release.package.imgcore]
+opt-level = 3
+
+[profile.release.package.image]
+opt-level = 3
+
+[profile.release.package.png]
+opt-level = 3
+
+[profile.release.package.fdeflate]
+opt-level = 3
+
+[profile.release.package.flate2]
+opt-level = 3
+
+[profile.release.package.miniz_oxide]
+opt-level = 3
+
+[profile.release.package."zune-jpeg"]
+opt-level = 3
+
+[profile.release.package."zune-core"]
+opt-level = 3
+
+[profile.release.package."image-webp"]
+opt-level = 3
+
+[profile.release.package.gif]
+opt-level = 3
+
+[profile.release.package.tiff]
+opt-level = 3
+
+[profile.release.package.weezl]
+opt-level = 3
+
+[profile.release.package.color_quant]
+opt-level = 3
+
+[profile.release.package."simd-adler32"]
+opt-level = 3
+
+[profile.release.package.crc32fast]
+opt-level = 3
+
+[profile.release.package.adler2]
+opt-level = 3

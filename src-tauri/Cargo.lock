@@ -1707,6 +1707,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "imgcore"
+version = "0.1.0"
+dependencies = [
+ "image",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3157,6 +3164,7 @@ name = "shiftwheel"
 version = "1.0.0"
 dependencies = [
  "image",
+ "imgcore",
  "log",
  "lopdf",
  "serde",
@@ -3164,6 +3172,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-log",
+ "windows",
  "windows-sys 0.61.2",
 ]
 

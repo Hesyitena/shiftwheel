@@ -46,7 +46,7 @@ pub trait Ui: Send + Sync + 'static {
     fn ask_crop(&self, req: CropRequest) -> Option<CropRect>;
 
     fn pick_folder(&self) -> Option<PathBuf> {
-        actions::pick_folder()
+        actions::pick_folder(None)
     }
     fn copy_text(&self, text: &str) -> Result<(), String> {
         actions::copy_text_to_clipboard(text)
@@ -100,34 +100,48 @@ fn selection_name(paths: &[String]) -> String {
 }
 
 fn tool_label(tool: &str) -> String {
-    crate::config::get_wheel_config()
+    crate::config::wheel_config()
         .tools
         .values()
         .flatten()
-        .find(|i| i.id == format!("tool:{tool}"))
+        .find(|i| i.id.strip_prefix("tool:") == Some(tool))
         .map(|i| i.label.clone())
         .unwrap_or_else(|| tool.to_string())
 }
 
-fn busy(name: &str, label: &str, chip: &str, index: usize, total: usize, percent: Option<f64>) -> HudMsg {
-    HudMsg {
-        name: name.into(),
-        label: label.into(),
-        chip: chip.into(),
-        index,
-        total,
-        percent,
-        state: "busy".into(),
-        detail: String::new(),
-        clickable: false,
+/// What a job's progress card is about.
+struct Card<'a> {
+    name: String,
+    label: &'a str,
+    chip: &'a str,
+    total: usize,
+}
+
+impl Card<'_> {
+    fn msg(&self, name: &str, index: usize, percent: Option<f64>) -> HudMsg {
+        HudMsg {
+            name: name.into(),
+            label: self.label.into(),
+            chip: self.chip.into(),
+            index,
+            total: self.total,
+            percent,
+            state: "busy".into(),
+            detail: String::new(),
+            clickable: false,
+        }
+    }
+
+    fn busy(&self, ui: &dyn Ui) {
+        ui.hud(&self.msg(&self.name, 1, None));
     }
 }
 
-/// Build the final card from what happened and send it, with a sound.
-fn conclude(ui: &dyn Ui, mut report: Report, name: &str, label: &str, chip: &str, total: usize) -> Report {
-    let n_out = report.outputs.len();
-    let n_err = report.errors.len();
-    let mut msg = busy(name, label, chip, total, total, Some(1.0));
+/// Build the final card from what happened and send it, with a sound. `done_detail` replaces
+/// the default "Saved as …" line on success.
+fn conclude(ui: &dyn Ui, mut report: Report, card: &Card, done_detail: Option<String>) -> Report {
+    let (n_out, n_err, total, label) = (report.outputs.len(), report.errors.len(), card.total, card.label);
+    let mut msg = card.msg(&card.name, total, Some(1.0));
     let first_err = || {
         let more = if n_err > 1 { format!(" (+{} more)", n_err - 1) } else { String::new() };
         format!("{}{more}", report.errors[0])
@@ -139,11 +153,11 @@ fn conclude(ui: &dyn Ui, mut report: Report, name: &str, label: &str, chip: &str
     } else if n_err == 0 {
         msg.state = "done".into();
         msg.label = format!("{label} · Done");
-        msg.detail = match n_out {
+        msg.detail = done_detail.unwrap_or_else(|| match n_out {
             0 => String::new(),
             1 => format!("Saved as {}", file_name(&report.outputs[0].to_string_lossy())),
             n => format!("{n} files saved"),
-        };
+        });
     } else if n_out == 0 {
         msg.state = "error".into();
         msg.label = format!("{label} · Failed");
@@ -161,39 +175,88 @@ fn conclude(ui: &dyn Ui, mut report: Report, name: &str, label: &str, chip: &str
     report
 }
 
-/// Run `f` on each file with progress updates.
+fn record(report: &mut Report, r: Result<Outcome, String>, name: &str, many: bool, label: &str) {
+    match r {
+        Ok(Outcome::Files(files)) => report.outputs.extend(files),
+        Ok(Outcome::Skipped(why)) => report.skipped.push(why),
+        Err(e) => {
+            log::error!("{label} failed for {name}: {e}");
+            report.errors.push(if many { format!("{name}: {e}") } else { e });
+        }
+    }
+}
+
+/// Most images in flight at once: each full-size decode can take a few hundred MB.
+const MAX_PARALLEL: usize = 4;
+
+/// Run `f` on each file with progress updates. With `parallel`, files are processed on several
+/// threads (pure-Rust image work); results and errors keep the selection order.
 fn per_file(
     ui: &dyn Ui,
     paths: &[String],
-    label: &str,
-    chip: &str,
-    f: impl Fn(&Path) -> Result<Outcome, String>,
+    card: &Card,
+    parallel: bool,
+    f: impl Fn(&Path) -> Result<Outcome, String> + Sync,
 ) -> Report {
     let total = paths.len();
+    let many = total > 1;
     let mut report = Report::default();
-    for (i, p) in paths.iter().enumerate() {
-        let name = file_name(p);
-        ui.hud(&busy(&name, label, chip, i + 1, total, if total > 1 { Some(i as f64 / total as f64) } else { None }));
-        match f(Path::new(p)) {
-            Ok(Outcome::Files(files)) => report.outputs.extend(files),
-            Ok(Outcome::Skipped(why)) => report.skipped.push(why),
-            Err(e) => {
-                log::error!("{label} failed for {p}: {e}");
-                report.errors.push(if total > 1 { format!("{name}: {e}") } else { e });
+    let workers = if parallel {
+        std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_PARALLEL).min(total)
+    } else {
+        1
+    };
+
+    if workers <= 1 {
+        for (i, p) in paths.iter().enumerate() {
+            let name = file_name(p);
+            ui.hud(&card.msg(&name, i + 1, many.then(|| i as f64 / total as f64)));
+            record(&mut report, f(Path::new(p)), &name, many, card.label);
+        }
+    } else {
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let next = AtomicUsize::new(0);
+        let done = AtomicUsize::new(0);
+        let results: Mutex<Vec<Option<Result<Outcome, String>>>> = Mutex::new((0..total).map(|_| None).collect());
+        ui.hud(&card.msg(&file_name(&paths[0]), 1, Some(0.0)));
+        std::thread::scope(|s| {
+            for _ in 0..workers {
+                s.spawn(|| {
+                    loop {
+                        let i = next.fetch_add(1, Ordering::SeqCst);
+                        if i >= total {
+                            break;
+                        }
+                        let r = f(Path::new(&paths[i]));
+                        results.lock().unwrap_or_else(|e| e.into_inner())[i] = Some(r);
+                        let d = done.fetch_add(1, Ordering::SeqCst) + 1;
+                        if d < total {
+                            ui.hud(&card.msg(&file_name(&paths[i]), d + 1, Some(d as f64 / total as f64)));
+                        }
+                    }
+                });
             }
+        });
+        let results = results.into_inner().unwrap_or_else(|e| e.into_inner());
+        for (p, r) in paths.iter().zip(results) {
+            record(&mut report, r.unwrap_or_else(|| Err("Not processed".into())), &file_name(p), many, card.label);
         }
     }
-    conclude(ui, report, &selection_name(paths), label, chip, total)
+    conclude(ui, report, card, None)
 }
 
-fn single(ui: &dyn Ui, paths: &[String], label: &str, chip: &str, r: Result<Outcome, String>) -> Report {
+fn single(ui: &dyn Ui, card: &Card, r: Result<Outcome, String>) -> Report {
     let mut report = Report::default();
-    match r {
-        Ok(Outcome::Files(f)) => report.outputs = f,
-        Ok(Outcome::Skipped(s)) => report.skipped.push(s),
-        Err(e) => report.errors.push(e),
-    }
-    conclude(ui, report, &selection_name(paths), label, chip, 1)
+    record(&mut report, r, &card.name, false, card.label);
+    conclude(ui, report, card, None)
+}
+
+/// Image work the `image` crate does in-process: safe and worthwhile to run in parallel.
+/// (FFmpeg and LibreOffice jobs stay sequential; they use several cores themselves.)
+fn parallel_image_job(paths: &[String], target: Option<&str>) -> bool {
+    let images = paths.iter().all(|p| converter::category_of(p) == "image");
+    images && target.is_none_or(|t| imgcore::is_native(t) || t == "pdf")
 }
 
 pub fn run_job(id: &str, paths: &[String], ui: &dyn Ui) -> Report {
@@ -204,11 +267,14 @@ pub fn run_job(id: &str, paths: &[String], ui: &dyn Ui) -> Report {
         return Report::default();
     }
     let name = selection_name(paths);
+    let total = paths.len();
 
     match kind {
         "convert" => {
             let fmt = value.to_uppercase();
-            per_file(ui, paths, &format!("Convert to {fmt}"), &fmt, |p| {
+            let label = format!("Convert to {fmt}");
+            let card = Card { name, label: &label, chip: &fmt, total };
+            per_file(ui, paths, &card, parallel_image_job(paths, Some(value)), |p| {
                 converter::convert_file(p, value).map(Outcome::Files)
             })
         }
@@ -216,16 +282,18 @@ pub fn run_job(id: &str, paths: &[String], ui: &dyn Ui) -> Report {
             let label = tool_label(value);
             let bufs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
             match value {
-                "image.pdf" => {
-                    ui.hud(&busy(&name, &label, "TOOL", 1, 1, None));
-                    single(ui, paths, &label, "TOOL", converter::images_to_combined_pdf(&bufs))
+                "image.pdf" | "pdf.merge" => {
+                    let card = Card { name, label: &label, chip: "TOOL", total: 1 };
+                    card.busy(ui);
+                    let r = if value == "image.pdf" { converter::images_to_combined_pdf(&bufs) } else { converter::merge_pdfs(&bufs) };
+                    single(ui, &card, r)
                 }
-                "pdf.merge" => {
-                    ui.hud(&busy(&name, &label, "TOOL", 1, 1, None));
-                    single(ui, paths, &label, "TOOL", converter::merge_pdfs(&bufs))
+                "image.crop" => crop_job(ui, paths, &Card { name, label: &label, chip: "TOOL", total }),
+                _ => {
+                    let card = Card { name, label: &label, chip: "TOOL", total };
+                    let parallel = value.starts_with("image.") && parallel_image_job(paths, None);
+                    per_file(ui, paths, &card, parallel, |p| converter::run_tool(value, p))
                 }
-                "image.crop" => crop_job(ui, paths, &label),
-                _ => per_file(ui, paths, &label, "TOOL", |p| converter::run_tool(value, p)),
             }
         }
         "action" => action_job(ui, value, paths),
@@ -233,7 +301,7 @@ pub fn run_job(id: &str, paths: &[String], ui: &dyn Ui) -> Report {
     }
 }
 
-fn crop_job(ui: &dyn Ui, paths: &[String], label: &str) -> Report {
+fn crop_job(ui: &dyn Ui, paths: &[String], card: &Card) -> Report {
     let first = Path::new(&paths[0]);
     let prepared = imaging::load_image(first).and_then(|img| {
         Ok(CropRequest {
@@ -246,17 +314,11 @@ fn crop_job(ui: &dyn Ui, paths: &[String], label: &str) -> Report {
     });
     let req = match prepared {
         Ok(r) => r,
-        Err(e) => {
-            let report = Report { errors: vec![e], ..Default::default() };
-            return conclude(ui, report, &selection_name(paths), label, "TOOL", 1);
-        }
+        Err(e) => return conclude(ui, Report { errors: vec![e], ..Default::default() }, card, None),
     };
     match ui.ask_crop(req) {
-        None => {
-            let report = Report { skipped: vec!["Crop cancelled".into()], ..Default::default() };
-            conclude(ui, report, &selection_name(paths), label, "TOOL", paths.len())
-        }
-        Some(rect) => per_file(ui, paths, label, "TOOL", |p| converter::crop_image(p, rect)),
+        None => conclude(ui, Report { skipped: vec!["Crop cancelled".into()], ..Default::default() }, card, None),
+        Some(rect) => per_file(ui, paths, card, parallel_image_job(paths, None), |p| converter::crop_image(p, rect)),
     }
 }
 
@@ -270,62 +332,36 @@ fn action_job(ui: &dyn Ui, action: &str, paths: &[String]) -> Report {
         "reveal" => "Explorer",
         _ => "Action",
     };
-    let name = selection_name(paths);
+    let card = Card { name: selection_name(paths), label, chip: "ACTION", total: paths.len() };
     let mut report = Report::default();
-    let mut detail = String::new();
-    let mut reveal: Option<PathBuf> = None;
+    let mut detail = None;
 
-    let simple = |r: Result<(), String>, report: &mut Report| {
-        if let Err(e) = r {
-            report.errors.push(e);
-        }
-    };
-
-    match action {
-        "copy-path" => simple(ui.copy_text(&paths.join("\r\n")), &mut report),
-        "copy" => simple(ui.copy_files(paths), &mut report),
-        "terminal" => simple(ui.open_terminal(paths), &mut report),
-        "reveal" => simple(ui.reveal(&paths[0]), &mut report),
+    let result = match action {
+        "copy-path" => ui.copy_text(&paths.join("\r\n")),
+        "copy" => ui.copy_files(paths),
+        "terminal" => ui.open_terminal(paths),
+        "reveal" => ui.reveal(&paths[0]),
         "copy-to" | "move-to" => {
-            ui.hud(&busy(&name, &format!("{label}…"), "ACTION", 1, 1, None));
+            ui.hud(&card.msg(&card.name, 1, None));
             match ui.pick_folder() {
                 None => report.skipped.push(format!("{label} cancelled")),
                 Some(dir) => {
-                    let t = actions::transfer_files(paths, &dir, action == "move-to");
+                    let moving = action == "move-to";
+                    let t = actions::transfer_files(paths, &dir, moving);
                     report.errors = t.errors;
-                    detail = format!("{} {} to {}", t.done.len(), if action == "move-to" { "moved" } else { "copied" }, dir.display());
-                    reveal = t.done.last().cloned();
+                    detail = Some(format!("{} {} to {}", t.done.len(), if moving { "moved" } else { "copied" }, dir.display()));
+                    // Clicking the card shows the copied/moved items.
+                    report.outputs = t.done;
                 }
             }
+            Ok(())
         }
-        _ => report.errors.push(format!("Unknown action: {action}")),
+        _ => Err(format!("Unknown action: {action}")),
+    };
+    if let Err(e) = result {
+        report.errors.push(e);
     }
-
-    // Actions don't create files in the usual sense; build the card here.
-    let mut msg = busy(&name, label, "ACTION", 1, 1, Some(1.0));
-    if !report.skipped.is_empty() && report.errors.is_empty() {
-        msg.state = "info".into();
-        msg.label = report.skipped[0].clone();
-    } else if report.errors.is_empty() {
-        msg.state = "done".into();
-        msg.label = format!("{label} · Done");
-        msg.detail = detail;
-    } else {
-        msg.state = "error".into();
-        msg.label = format!("{label} · Failed");
-        msg.detail = report.errors[0].clone();
-        if report.errors.len() > 1 {
-            msg.detail.push_str(&format!(" (+{} more)", report.errors.len() - 1));
-        }
-    }
-    msg.clickable = reveal.is_some();
-    ui.sound(if msg.state == "error" { "error" } else { "done" });
-    ui.finish(&msg, reveal.clone());
-    if let Some(r) = reveal {
-        report.outputs.push(r);
-    }
-    report.final_msg = Some(msg);
-    report
+    conclude(ui, report, &card, detail)
 }
 
 pub struct Job {

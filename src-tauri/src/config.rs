@@ -64,6 +64,12 @@ fn action(id: &str, label: &str, caption: &str, icon: &str) -> WheelItem {
     }
 }
 
+/// The wheel contents, built once.
+pub fn wheel_config() -> &'static WheelConfig {
+    static CONFIG: std::sync::OnceLock<WheelConfig> = std::sync::OnceLock::new();
+    CONFIG.get_or_init(get_wheel_config)
+}
+
 pub fn get_wheel_config() -> WheelConfig {
     let mut convert = HashMap::new();
     // Plain-text files with other extensions (.json, .log, .xml, code, ...).
