@@ -177,7 +177,12 @@ fn conclude(ui: &dyn Ui, mut report: Report, card: &Card, done_detail: Option<St
 
 fn record(report: &mut Report, r: Result<Outcome, String>, name: &str, many: bool, label: &str) {
     match r {
-        Ok(Outcome::Files(files)) => report.outputs.extend(files),
+        Ok(Outcome::Files(files)) => {
+            for f in &files {
+                crate::actions::notify_shell_change(f);
+            }
+            report.outputs.extend(files);
+        }
         Ok(Outcome::Skipped(why)) => report.skipped.push(why),
         Err(e) => {
             log::error!("{label} failed for {name}: {e}");

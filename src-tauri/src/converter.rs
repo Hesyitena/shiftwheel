@@ -86,6 +86,7 @@ fn move_into(tmp: &Path, dir: &Path, stem: &str, ext: &str) -> Result<PathBuf, S
         }
         let _ = std::fs::remove_file(tmp);
     }
+    crate::actions::notify_shell_change(&out);
     Ok(out)
 }
 

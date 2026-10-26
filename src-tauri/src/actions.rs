@@ -3,6 +3,23 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
+pub fn notify_shell_change(path: &Path) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_CREATE, SHCNE_UPDATEDIR, SHCNF_PATHW};
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+    unsafe {
+        SHChangeNotify(SHCNE_CREATE as i32, SHCNF_PATHW, wide.as_ptr() as _, std::ptr::null());
+        if let Some(parent) = path.parent() {
+            let parent_wide: Vec<u16> = parent.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+            SHChangeNotify(SHCNE_UPDATEDIR as i32, SHCNF_PATHW, parent_wide.as_ptr() as _, std::ptr::null());
+        }
+    }
+}
+
+#[cfg(not(windows))]
+pub fn notify_shell_change(_path: &Path) {}
+
+#[cfg(windows)]
 use std::process::Command;
 
 /// `dir/stem.ext`, or `dir/stem (1).ext`, `dir/stem (2).ext`, ... if that name is taken.
@@ -48,6 +65,7 @@ pub fn write_unique(dir: &Path, stem: &str, ext: &str, bytes: &[u8]) -> Result<P
         let _ = fs::remove_file(&path);
         return Err(format!("Could not save {}: {e}", path.display()));
     }
+    notify_shell_change(&path);
     Ok(path)
 }
 

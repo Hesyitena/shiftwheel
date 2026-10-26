@@ -14,7 +14,7 @@ mod window_manager;
 
 use converter::CropRect;
 use jobs::{CropRequest, HudMsg, Job, JobQueue, Ui};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -202,6 +202,18 @@ fn hide_overlay_now<R: Runtime>(app: &AppHandle<R>) {
     window_manager::hide_overlay(app);
 }
 
+fn make_thumbnail(path: &str) -> Option<String> {
+    let p = Path::new(path);
+    if !p.exists() || !p.is_file() {
+        return None;
+    }
+    if converter::category_of(path) != "image" {
+        return None;
+    }
+    let img = imaging::load_image(p).ok()?;
+    imgcore::preview_data_url(&img, 96).ok()
+}
+
 fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
     let st = state(app);
     let to_logical = |p: &tauri::PhysicalPosition<f64>| (p.x / scale, p.y / scale);
@@ -211,6 +223,11 @@ fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
         tauri::DragDropEvent::Enter { paths, position } => {
             let (lx, ly) = to_logical(position);
             let paths = to_strings(paths);
+            let first_path = paths.first().cloned();
+            let file_name = first_path.as_ref().and_then(|p| {
+                Path::new(p).file_name().map(|n| n.to_string_lossy().to_string())
+            });
+            let thumb = first_path.as_ref().and_then(|p| make_thumbnail(p));
             let items = {
                 let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
                 d.active = true;
@@ -227,6 +244,9 @@ fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
                     "items": items,
                     "x": lx,
                     "y": ly,
+                    "paths": paths,
+                    "file_name": file_name,
+                    "thumb": thumb,
                 }),
             );
         }
