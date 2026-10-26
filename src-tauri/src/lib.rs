@@ -315,18 +315,30 @@ fn on_hook_event(app: &AppHandle, event: hook::HookEvent) {
                 *st.overlay_pos.lock().unwrap_or_else(|e| e.into_inner()) = pos;
                 *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner()) = (180.0, 180.0);
             }
-            let items = {
+            let (items, paths, file_name, thumb, category) = {
                 let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
                 d.mode = mode.clone();
-                if fresh {
-                    d.active = false;
-                    d.paths.clear();
-                }
-                wheel::items_for(&st.config, &mode, &d.paths)
+                let items = wheel::items_for(&st.config, &mode, &d.paths);
+                let paths = d.paths.clone();
+                let first_path = paths.first().cloned();
+                let file_name = first_path.as_ref().and_then(|p| {
+                    Path::new(p).file_name().map(|n| n.to_string_lossy().to_string())
+                });
+                let thumb = first_path.as_ref().and_then(|p| make_thumbnail(p));
+                let category = if paths.is_empty() { None } else { Some(wheel::category_for(&paths)) };
+                (items, paths, file_name, thumb, category)
             };
             let _ = app.emit(
                 "overlay:show",
-                serde_json::json!({ "mode": mode, "fresh": fresh, "items": items }),
+                serde_json::json!({
+                    "mode": mode,
+                    "fresh": fresh,
+                    "items": items,
+                    "paths": paths,
+                    "file_name": file_name,
+                    "thumb": thumb,
+                    "category": category,
+                }),
             );
         }
         hook::HookEvent::CursorMove { x, y } => {
