@@ -87,31 +87,29 @@ If one is missing when you drop a file, the notification gives you the `winget` 
 
 ## Install & Build
 
-Requires Node.js 20+ to build from source:
+Requires Rust toolchain and Node.js:
 
 ```bash
 npm install
 npm run dist
 ```
 
-Run `dist/Shiftwheel Setup <version>.exe` — installs per-user into `%LOCALAPPDATA%\Programs\Shiftwheel` (no admin prompt), registers the Explorer context menu, and starts in the system tray.
+Run `src-tauri/target/release/bundle/nsis/Shiftwheel_1.0.0_x64-setup.exe` (or in `dist/`) — installs per-user into `%LOCALAPPDATA%\Programs\Shiftwheel` (no admin prompt) and starts in the system tray.
 
 | Script | Description |
 |---|---|
-| `npm run dev` | Run from source and auto-restart on file save (closes any installed tray instance first) |
-| `npm run install-local` | Build the installer into `dist/install-<time>` and silently replace the running tray app |
-| `npm test` | Syntax check (`node --check`), CSP SHA-256 hash check, hotkey tests, and converter/tool tests |
-| `node test/check.js --fix` | Rewrite CSP hashes in `overlay.html`, `hud.html`, and `crop.html` after editing inline styles/scripts |
+| `npm run dev` | Run Shiftwheel with Tauri dev mode |
+| `npm run build` | Build release binary (`src-tauri/target/release/shiftwheel.exe`) |
+| `npm run dist` | Build NSIS setup installer (`1.29 MB`) |
 
 ---
 
 ## Resource Usage & Internals
 
-Idle footprint is ~75 MB private RAM across 3 processes and ~0.4% of one CPU core:
+Tauri v2 native architecture brings minimal resource footprint:
 
-- **CPU rendering only** (`app.disableHardwareAcceleration()`), trimming Chromium's GPU process from ~80 MB to ~15 MB.
-- **In-process network service** (`NetworkServiceInProcess`) since the app never uses the network.
-- **Lazy loading**: `sharp` (`libvips`) and `pdf-lib` load only when the first job runs.
-- **Synthesized WebAudio**: UI sounds are generated on the fly with oscillators; the `AudioContext` closes 1.5 s after the last sound so it doesn't burn idle CPU.
-- **OLE file-drag probe**: When a drag + key tap is detected, the overlay probes at 1% alpha and only reveals the wheel if Windows OLE confirms files are being dragged (or the cursor is held stationary on a drag), avoiding false triggers during text selection.
-- **Non-destructive drop**: Holding <kbd>Shift</kbd> normally tells Explorer to move a file; Shiftwheel forces `dropEffect = 'copy'` so dropping on the wheel never deletes the source file.
+- **Ultra-compact size**: Installer is **~1.29 MB**, installed executable is **~3.4 MB** (compared to Electron's ~103 MB installer).
+- **Idle footprint**: **~25–35 MB** RAM, near-zero CPU usage.
+- **Native Windows low-level hook**: `WH_MOUSE_LL` and `WH_KEYBOARD_LL` running in a lightweight background thread with zero Node.js addon overhead.
+- **Synthesized WebAudio**: UI sounds are generated on the fly with oscillators; the `AudioContext` closes after 1.5 s of silence.
+- **Non-destructive drop**: Holding <kbd>Shift</kbd> normally tells Explorer to move a file; Shiftwheel forces `copy` mode so dropping on the wheel never deletes the source file.
