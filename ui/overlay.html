@@ -199,6 +199,7 @@
   const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
   const state = { mode: 'convert', category: null, count: 0, items: null };
   let hover = null; // highlighted segment, or the center hole (cancel)
+  let dropped = false;
   let revealed = false; // stays invisible until the backend reports a file drag over the wheel
 
   function el(tag, attrs, text) {
@@ -340,7 +341,7 @@
   window.shiftwheel.onDragLeave(() => setHover(null));
 
   // The backend plays the select/cancel sound and runs the job
-  window.shiftwheel.onDragDrop(() => setHover(null));
+  window.shiftwheel.onDragDrop(() => { dropped = true; setHover(null); });
 
   window.shiftwheel.onSettings((s) => { sound.on = Boolean(s && s.sound); });
   window.shiftwheel.onSound(play);
@@ -348,6 +349,7 @@
 
   window.shiftwheel.onShow((p) => {
     state.mode = p.mode;
+    dropped = false;
     stage.classList.remove('closing');
     if (Array.isArray(p.items) && p.items.length) {
       state.items = p.items;
@@ -366,7 +368,6 @@
   });
 
   document.addEventListener('dragover', (e) => {
-    e.preventDefault();
     if (!revealed) revealWheel();
     setHover(segmentAt(e.clientX, e.clientY));
   });
@@ -381,6 +382,7 @@
   // Mouse released: wheel fades out
   window.shiftwheel.onClose(() => {
     if (!revealed) return;
+    if (!dropped) play('close');
     stage.classList.add('closing');
   });
 </script>
