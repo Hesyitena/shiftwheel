@@ -9,7 +9,7 @@ contextBridge.exposeInMainWorld('shiftwheel', {
   onShow: on('overlay:show'),
   onClose: on('overlay:close'),
   onSound: on('overlay:sound'),
-  revealed: () => ipcRenderer.send('overlay:revealed'),
+  revealed: (ok = true) => ipcRenderer.send('overlay:revealed', ok),
   onHud: on('hud:update'),
   onHudHide: on('hud:hide'),
   onCropInit: on('crop:init'),

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-wIG/0qhBBPRo/pDdYkycP6VsMMZ3Ud2QdOEkMNa3b7Y='; style-src 'sha256-rVufMI6lAy7Ilv1/vfI280JO1Ia6jfRkc/3NlM8LCh8='">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'sha256-rAMAfXzc6t8iF54PO5n8yRjzBlLWvxAv50o/5jkea2w='; style-src 'sha256-tI0EoDJ6qXxiXc8ZxaYG6FoyQ4/o+b5r39YJHL31iNo='">
 <title>Shiftwheel</title>
 <style>
   :root {
@@ -20,8 +20,8 @@
   html, body { margin: 0; width: 360px; height: 380px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
   body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
   #stage { position: absolute; inset: 0; transform-origin: 180px 180px; }
-  /* Keep alpha >= 1/255 while probing so Windows WS_EX_LAYERED hit-testing still delivers dragenter */
-  #stage.probing { opacity: .01; }
+  /* Keep alpha >= 5/255 while probing so Windows DWM/WS_EX_LAYERED hit-testing reliably delivers dragenter */
+  #stage.probing { opacity: .03; background: rgba(128, 128, 128, .01); border-radius: 50%; }
   #stage.pop { animation: pop 120ms ease-out backwards; }
   #stage.closing { animation: out 100ms ease-in forwards; }
   @keyframes pop { from { transform: scale(.96); opacity: 0; } }
@@ -316,7 +316,11 @@
 
   function onFileDrag(e) {
     const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
-    if (!types.includes('Files')) return;
+    if (!types.includes('Files')) {
+      clearTimeout(probeRevealTimer);
+      window.shiftwheel.revealed(false);
+      return;
+    }
     if (state.category === null) {
       const files = [...(e.dataTransfer.items || [])].filter((i) => i.kind === 'file');
       state.count = files.length || 1;
@@ -349,7 +353,7 @@
   }
 
   window.shiftwheel.onConfig((config) => { state.config = config; render(); });
-  window.shiftwheel.onSettings((s) => { sound.on = s.sound; });
+  window.shiftwheel.onSettings((s) => { sound.on = Boolean(s && s.sound); });
   window.shiftwheel.onSound(play);
 
   // The wheel probes silently on fresh open until dragenter/dragover confirms a file drag
@@ -366,7 +370,7 @@
       stage.classList.remove('pop');
       stage.classList.add('probing');
       render();
-      probeRevealTimer = setTimeout(revealWheel, 110);
+      probeRevealTimer = setTimeout(revealWheel, 80);
       return;
     }
     if (revealed) play('switch');
