@@ -1,10 +1,7 @@
-use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+use tauri::{AppHandle, Manager};
+use windows_sys::Win32::Foundation::{POINT, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
-use windows_sys::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
-    SW_SHOWNOACTIVATE,
 };
 
 pub const OVERLAY_W: i32 = 360;
@@ -13,24 +10,6 @@ pub const WHEEL_CENTER: i32 = 180;
 
 pub const HUD_W: i32 = 340;
 pub const HUD_H: i32 = 92;
-
-fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-pub fn get_overlay_hwnd() -> HWND {
-    unsafe {
-        let title = to_wide("Shiftwheel");
-        FindWindowW(std::ptr::null(), title.as_ptr())
-    }
-}
-
-pub fn get_hud_hwnd() -> HWND {
-    unsafe {
-        let title = to_wide("Shiftwheel HUD");
-        FindWindowW(std::ptr::null(), title.as_ptr())
-    }
-}
 
 pub fn get_work_area_for_point(pt: POINT) -> RECT {
     unsafe {
@@ -50,78 +29,55 @@ pub fn get_work_area_for_point(pt: POINT) -> RECT {
     }
 }
 
-pub fn place_and_show_overlay(x: i32, y: i32) {
-    let pt = POINT { x, y };
-    let wa = get_work_area_for_point(pt);
+pub fn place_and_show_overlay(app: &AppHandle, x: i32, y: i32) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let scale = overlay.scale_factor().unwrap_or(1.0);
+        let pt = POINT { x, y };
+        let wa = get_work_area_for_point(pt);
 
-    let clamp = |val: i32, min: i32, max: i32| -> i32 {
-        if val < min {
-            min
-        } else if val > max {
-            max
-        } else {
-            val
-        }
-    };
+        let target_x = (x - WHEEL_CENTER).clamp(wa.left, wa.right - OVERLAY_W);
+        let target_y = (y - WHEEL_CENTER).clamp(wa.top, wa.bottom - OVERLAY_H);
 
-    let target_x = clamp(x - WHEEL_CENTER, wa.left, wa.right - OVERLAY_W);
-    let target_y = clamp(y - WHEEL_CENTER, wa.top, wa.bottom - OVERLAY_H);
+        let logical_x = target_x as f64 / scale;
+        let logical_y = target_y as f64 / scale;
 
-    let hwnd = get_overlay_hwnd();
-    if hwnd != 0 as HWND {
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                target_x,
-                target_y,
-                OVERLAY_W,
-                OVERLAY_H,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-        }
+        let _ = overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+            x: logical_x,
+            y: logical_y,
+        }));
+        let _ = overlay.set_always_on_top(true);
+        let _ = overlay.show();
     }
 }
 
-pub fn hide_overlay() {
-    let hwnd = get_overlay_hwnd();
-    if hwnd != 0 as HWND {
-        unsafe {
-            ShowWindow(hwnd, SW_HIDE);
-        }
+pub fn hide_overlay(app: &AppHandle) {
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.hide();
     }
 }
 
-pub fn place_and_show_hud(x: i32, y: i32) {
-    let pt = POINT { x, y };
-    let wa = get_work_area_for_point(pt);
+pub fn place_and_show_hud(app: &AppHandle) {
+    if let Some(hud) = app.get_webview_window("hud") {
+        if let Ok(Some(mon)) = hud.current_monitor() {
+            let mon_size = mon.size();
+            let scale = mon.scale_factor();
+            let logical_w = mon_size.width as f64 / scale;
+            let logical_h = mon_size.height as f64 / scale;
+            let target_x = logical_w - (HUD_W as f64) - 16.0;
+            let target_y = logical_h - (HUD_H as f64) - 16.0;
 
-    let target_x = wa.right - HUD_W - 8;
-    let target_y = wa.bottom - HUD_H - 4;
-
-    let hwnd = get_hud_hwnd();
-    if hwnd != 0 as HWND {
-        unsafe {
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                target_x,
-                target_y,
-                HUD_W,
-                HUD_H,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-            ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+            let _ = hud.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: target_x,
+                y: target_y,
+            }));
         }
+        let _ = hud.set_always_on_top(true);
+        let _ = hud.show();
     }
 }
 
-pub fn hide_hud() {
-    let hwnd = get_hud_hwnd();
-    if hwnd != 0 as HWND {
-        unsafe {
-            ShowWindow(hwnd, SW_HIDE);
-        }
+pub fn hide_hud(app: &AppHandle) {
+    if let Some(hud) = app.get_webview_window("hud") {
+        let _ = hud.hide();
     }
 }

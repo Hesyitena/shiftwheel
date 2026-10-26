@@ -13,10 +13,10 @@ use tauri::{AppHandle, Emitter};
 static SOUND_ON: AtomicBool = AtomicBool::new(true);
 
 #[tauri::command]
-fn overlay_revealed(ok: bool) {
+fn overlay_revealed(app: AppHandle, ok: bool) {
     if !ok {
         hook::reset_drag();
-        window_manager::hide_overlay();
+        window_manager::hide_overlay(&app);
     }
 }
 
@@ -28,7 +28,7 @@ fn crop_done(_rect: serde_json::Value) {
 #[tauri::command]
 fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
     hook::reset_drag();
-    window_manager::hide_overlay();
+    window_manager::hide_overlay(&app);
 
     let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let paths: Vec<String> = msg
@@ -60,6 +60,8 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                 let mut last_out = None;
                 let mut ok_count = 0;
 
+                window_manager::place_and_show_hud(&app_clone);
+
                 for (i, p) in paths.iter().enumerate() {
                     let name = std::path::Path::new(p)
                         .file_name()
@@ -77,7 +79,6 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                             "percent": null,
                         }),
                     );
-                    window_manager::place_and_show_hud(1920, 1080);
 
                     match converter::convert_file(p, value) {
                         Ok(out) => {
@@ -88,10 +89,25 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                             log::error!("Conversion failed: {}", err);
                         }
                     }
+
+                    let percent = ((i + 1) as f64) / (total as f64);
+                    let _ = app_clone.emit(
+                        "hud:update",
+                        serde_json::json!({
+                            "name": name,
+                            "label": if i + 1 == total { "Done!".to_string() } else { format!("Convert to {}", value.to_uppercase()) },
+                            "chip": value.to_uppercase(),
+                            "index": i + 1,
+                            "total": total,
+                            "percent": percent,
+                        }),
+                    );
                 }
 
+                std::thread::sleep(Duration::from_millis(1200));
                 let _ = app_clone.emit("hud:hide", ());
-                window_manager::hide_hud();
+                std::thread::sleep(Duration::from_millis(250));
+                window_manager::hide_hud(&app_clone);
 
                 if ok_count > 0 {
                     if SOUND_ON.load(Ordering::SeqCst) {
@@ -109,6 +125,8 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                 let mut last_out = None;
                 let mut ok_count = 0;
 
+                window_manager::place_and_show_hud(&app_clone);
+
                 for (i, p) in paths.iter().enumerate() {
                     let name = std::path::Path::new(p)
                         .file_name()
@@ -119,14 +137,13 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                         "hud:update",
                         serde_json::json!({
                             "name": name,
-                            "label": value,
+                            "label": format!("Tool: {value}"),
                             "chip": "TOOL",
                             "index": i + 1,
                             "total": total,
                             "percent": null,
                         }),
                     );
-                    window_manager::place_and_show_hud(1920, 1080);
 
                     match converter::run_tool(value, &[p.clone()]) {
                         Ok(out) => {
@@ -137,10 +154,25 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                             log::error!("Tool failed: {}", err);
                         }
                     }
+
+                    let percent = ((i + 1) as f64) / (total as f64);
+                    let _ = app_clone.emit(
+                        "hud:update",
+                        serde_json::json!({
+                            "name": name,
+                            "label": if i + 1 == total { "Done!".to_string() } else { format!("Tool: {value}") },
+                            "chip": "TOOL",
+                            "index": i + 1,
+                            "total": total,
+                            "percent": percent,
+                        }),
+                    );
                 }
 
+                std::thread::sleep(Duration::from_millis(1200));
                 let _ = app_clone.emit("hud:hide", ());
-                window_manager::hide_hud();
+                std::thread::sleep(Duration::from_millis(250));
+                window_manager::hide_hud(&app_clone);
 
                 if ok_count > 0 {
                     if SOUND_ON.load(Ordering::SeqCst) {
@@ -153,29 +185,78 @@ fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
                     let _ = app_clone.emit("overlay:sound", "error");
                 }
             }
-            "action" => match value {
-                "copy-path" => {
-                    let _ = actions::copy_text_to_clipboard(&paths.join("\r\n"));
-                }
-                "copy" => {
-                    let _ = actions::copy_files_to_clipboard(&paths);
-                }
-                "copy-to" => {
-                    let _ = actions::transfer_files(&paths, false);
-                }
-                "move-to" => {
-                    let _ = actions::transfer_files(&paths, true);
-                }
-                "terminal" => {
-                    actions::open_terminal(&paths);
-                }
-                "reveal" => {
-                    if let Some(first) = paths.first() {
-                        actions::reveal_in_explorer(first);
+            "action" => {
+                let name = paths
+                    .first()
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "Selection".to_string());
+
+                window_manager::place_and_show_hud(&app_clone);
+
+                let label = match value {
+                    "copy-path" => "Copy path",
+                    "copy" => "Copy to clipboard",
+                    "copy-to" => "Copy to folder",
+                    "move-to" => "Move to folder",
+                    "terminal" => "Open Terminal",
+                    "reveal" => "Reveal in Explorer",
+                    _ => "Action",
+                };
+
+                let _ = app_clone.emit(
+                    "hud:update",
+                    serde_json::json!({
+                        "name": name,
+                        "label": format!("{label}..."),
+                        "chip": "ACTION",
+                        "index": 1,
+                        "total": 1,
+                        "percent": null,
+                    }),
+                );
+
+                match value {
+                    "copy-path" => {
+                        let _ = actions::copy_text_to_clipboard(&paths.join("\r\n"));
                     }
+                    "copy" => {
+                        let _ = actions::copy_files_to_clipboard(&paths);
+                    }
+                    "copy-to" => {
+                        let _ = actions::transfer_files(&paths, false);
+                    }
+                    "move-to" => {
+                        let _ = actions::transfer_files(&paths, true);
+                    }
+                    "terminal" => {
+                        actions::open_terminal(&paths);
+                    }
+                    "reveal" => {
+                        if let Some(first) = paths.first() {
+                            actions::reveal_in_explorer(first);
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+
+                let _ = app_clone.emit(
+                    "hud:update",
+                    serde_json::json!({
+                        "name": name,
+                        "label": format!("{label} · Done!"),
+                        "chip": "ACTION",
+                        "index": 1,
+                        "total": 1,
+                        "percent": 1.0,
+                    }),
+                );
+
+                std::thread::sleep(Duration::from_millis(1200));
+                let _ = app_clone.emit("hud:hide", ());
+                std::thread::sleep(Duration::from_millis(250));
+                window_manager::hide_hud(&app_clone);
+            }
             _ => {}
         }
     });
@@ -214,7 +295,7 @@ pub fn run() {
                 let handle = app_handle.clone();
                 match event {
                     hook::HookEvent::OpenWheel { mode, x, y } => {
-                        window_manager::place_and_show_overlay(x, y);
+                        window_manager::place_and_show_overlay(&handle, x, y);
                         hook::set_shown(true);
                         let _ = handle.emit(
                             "overlay:show",
@@ -224,15 +305,16 @@ pub fn run() {
                     hook::HookEvent::ScheduleHide => {
                         hook::set_shown(false);
                         let _ = handle.emit("overlay:close", ());
+                        let h = handle.clone();
                         std::thread::spawn(move || {
                             std::thread::sleep(Duration::from_millis(350));
-                            window_manager::hide_overlay();
+                            window_manager::hide_overlay(&h);
                         });
                     }
                     hook::HookEvent::HideNow => {
                         hook::set_shown(false);
                         let _ = handle.emit("overlay:close", ());
-                        window_manager::hide_overlay();
+                        window_manager::hide_overlay(&handle);
                     }
                     hook::HookEvent::ProbeCheck => {}
                 }
