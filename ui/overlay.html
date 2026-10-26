@@ -73,7 +73,7 @@
   </svg>
   <div id="center" class="idle"><div id="title"></div><div id="desc"></div></div>
   <div id="modes">
-    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Convert</div>
+    <div class="mode" data-mode="convert"><kbd>â‡§</kbd>Convert</div>
     <div class="mode" data-mode="tools"><kbd>Ctrl</kbd>Tools</div>
     <div class="mode" data-mode="actions"><kbd>Alt</kbd>Actions</div>
   </div>
@@ -89,7 +89,7 @@
     slides: ['presentation', 'presentations'], audio: ['audio file', 'audio files'], video: ['video', 'videos'], unknown: ['file', 'files'],
   };
 
-  // 24×24 line icons for the tools and actions wheels
+  // 24Ã—24 line icons for the tools and actions wheels
   const ICONS = {
     compress: 'M4 14h6v6M20 10h-6V4M14 10l6-6M4 20l6-6',
     half: 'M4 4h16v16H4zM4 12h8v8',
@@ -349,10 +349,46 @@
     const dist = Math.hypot(x - C, y - C);
     if (dist < r) return hole;
     const list = segs.querySelectorAll('.seg');
-    if (dist > R + 4 || !list.length) return null;
-    const angle = (Math.atan2(y - C, x - C) * 180 / Math.PI + 90 + 360 / list.length / 2 + 360) % 360;
-    return list[Math.floor(angle / (360 / list.length))] || null;
+    if (dist > R + 20 || !list.length) return null;
+    const step = 360 / list.length;
+    const angle = (Math.atan2(y - C, x - C) * 180 / Math.PI + 90 + step / 2 + 360) % 360;
+    return list[Math.floor(angle / step)] || null;
   }
+
+  // Native Tauri drag-and-drop events
+  window.shiftwheel.onDragEnter((payload) => {
+    if (!payload) return;
+    if (payload.category) state.category = payload.category;
+    if (payload.count) state.count = payload.count;
+    revealWheel();
+    render();
+    if (typeof payload.x === 'number' && typeof payload.y === 'number') {
+      setHover(segmentAt(payload.x, payload.y));
+    }
+  });
+
+  window.shiftwheel.onDragOver((payload) => {
+    if (!payload) return;
+    revealWheel();
+    if (typeof payload.x === 'number' && typeof payload.y === 'number') {
+      setHover(segmentAt(payload.x, payload.y));
+    }
+  });
+
+  window.shiftwheel.onDragLeave(() => {
+    setHover(null);
+  });
+
+  window.shiftwheel.onDragDrop((payload) => {
+    clearTimeout(closeTimer);
+    clearTimeout(probeRevealTimer);
+    dropped = true;
+    if (payload && payload.id) {
+      play('select');
+    } else {
+      play('cancel');
+    }
+  });
 
   window.shiftwheel.onConfig((config) => { state.config = config; render(); });
   window.shiftwheel.onSettings((s) => { sound.on = Boolean(s && s.sound); });
@@ -379,26 +415,11 @@
     render();
   });
 
-  // Mouse released: the picked segment stays lit while the wheel fades.
-  // uiohook's mouseup arrives slightly before Windows delivers the DOM drop event,
-  // so if a segment/hole is hovered we wait briefly for drop before falling back to 'close'.
+  // Mouse released: wheel fades out
   window.shiftwheel.onClose(() => {
     clearTimeout(probeRevealTimer);
     if (!revealed) return;
     stage.classList.add('closing');
-    if (dropped) return;
-    if (!hover) {
-      dropped = true;
-      play('close');
-    } else {
-      clearTimeout(closeTimer);
-      closeTimer = setTimeout(() => {
-        if (!dropped) {
-          dropped = true;
-          play('close');
-        }
-      }, 60);
-    }
   });
 </script>
 </body>

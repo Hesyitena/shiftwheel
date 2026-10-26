@@ -21,6 +21,84 @@ pub fn category_of(file: &str) -> &'static str {
     }
 }
 
+pub fn image_to_pdf(src_path: &Path, out_path: &Path) -> Result<(), String> {
+    let img = image::open(src_path).map_err(|e| e.to_string())?;
+    let (width, height) = (img.width(), img.height());
+
+    let mut jpeg_buf = std::io::Cursor::new(Vec::new());
+    let rgb = if let Some(rgba) = img.as_rgba8() {
+        let mut flat = image::RgbImage::new(width, height);
+        for (x, y, p) in rgba.enumerate_pixels() {
+            let a = p[3] as f32 / 255.0;
+            let r = (p[0] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+            let g = (p[1] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+            let b = (p[2] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+            flat.put_pixel(x, y, image::Rgb([r, g, b]));
+        }
+        flat
+    } else {
+        img.to_rgb8()
+    };
+
+    rgb.write_to(&mut jpeg_buf, image::ImageFormat::Jpeg)
+        .map_err(|e| e.to_string())?;
+    let jpeg_bytes = jpeg_buf.into_inner();
+    let jpeg_len = jpeg_bytes.len();
+
+    let w_pt = width as f64;
+    let h_pt = height as f64;
+
+    let mut pdf = Vec::new();
+    use std::io::Write;
+    let _ = writeln!(pdf, "%PDF-1.4");
+
+    let off1 = pdf.len();
+    let _ = writeln!(pdf, "1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj");
+
+    let off2 = pdf.len();
+    let _ = writeln!(pdf, "2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj");
+
+    let off3 = pdf.len();
+    let _ = writeln!(
+        pdf,
+        "3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.2} {:.2}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj",
+        w_pt, h_pt
+    );
+
+    let off4 = pdf.len();
+    let _ = writeln!(
+        pdf,
+        "4 0 obj\n<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length {} >>\nstream",
+        width, height, jpeg_len
+    );
+    pdf.extend_from_slice(&jpeg_bytes);
+    let _ = writeln!(pdf, "\nendstream\nendobj");
+
+    let off5 = pdf.len();
+    let stream_content = format!("q {:.2} 0 0 {:.2} 0 0 cm /Im0 Do Q", w_pt, h_pt);
+    let _ = writeln!(
+        pdf,
+        "5 0 obj\n<< /Length {} >>\nstream\n{}\nendstream\nendobj",
+        stream_content.len(),
+        stream_content
+    );
+
+    let xref_off = pdf.len();
+    let _ = writeln!(
+        pdf,
+        "xref\n0 6\n0000000000 65535 f \n{:010} 00000 n \n{:010} 00000 n \n{:010} 00000 n \n{:010} 00000 n \n{:010} 00000 n ",
+        off1, off2, off3, off4, off5
+    );
+    let _ = writeln!(
+        pdf,
+        "trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n{}\n%%EOF",
+        xref_off
+    );
+
+    std::fs::write(out_path, pdf).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 pub fn convert_file(src_path: &str, target_fmt: &str) -> Result<PathBuf, String> {
     let src = Path::new(src_path);
     if !src.exists() {
@@ -34,14 +112,28 @@ pub fn convert_file(src_path: &str, target_fmt: &str) -> Result<PathBuf, String>
 
     let cat = category_of(src_path);
 
-    // 1. Image conversions via `image` crate
+    // 1. Image conversions via `image` crate and pure Rust
     if cat == "image" {
         match target_ext.as_str() {
             "jpg" | "jpeg" => {
                 let img = image::open(src).map_err(|e| e.to_string())?;
-                let rgb = img.to_rgb8();
-                rgb.save_with_format(&out, image::ImageFormat::Jpeg)
-                    .map_err(|e| e.to_string())?;
+                if let Some(rgba) = img.as_rgba8() {
+                    let (w, h) = rgba.dimensions();
+                    let mut flat = image::RgbImage::new(w, h);
+                    for (x, y, p) in rgba.enumerate_pixels() {
+                        let a = p[3] as f32 / 255.0;
+                        let r = (p[0] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+                        let g = (p[1] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+                        let b = (p[2] as f32 * a + 255.0 * (1.0 - a)).round() as u8;
+                        flat.put_pixel(x, y, image::Rgb([r, g, b]));
+                    }
+                    flat.save_with_format(&out, image::ImageFormat::Jpeg)
+                        .map_err(|e| e.to_string())?;
+                } else {
+                    let rgb = img.to_rgb8();
+                    rgb.save_with_format(&out, image::ImageFormat::Jpeg)
+                        .map_err(|e| e.to_string())?;
+                }
                 return Ok(out);
             }
             "png" => {
@@ -68,7 +160,27 @@ pub fn convert_file(src_path: &str, target_fmt: &str) -> Result<PathBuf, String>
                     .map_err(|e| e.to_string())?;
                 return Ok(out);
             }
-            _ => {}
+            "gif" => {
+                let img = image::open(src).map_err(|e| e.to_string())?;
+                img.save_with_format(&out, image::ImageFormat::Gif)
+                    .map_err(|e| e.to_string())?;
+                return Ok(out);
+            }
+            "pdf" => {
+                image_to_pdf(src, &out)?;
+                return Ok(out);
+            }
+            _ => {
+                // Try ffmpeg for other formats like avif
+                let status = Command::new("ffmpeg")
+                    .args(["-y", "-i", src_path, &out.to_string_lossy()])
+                    .status();
+                if let Ok(st) = status {
+                    if st.success() {
+                        return Ok(out);
+                    }
+                }
+            }
         }
     }
 
@@ -232,5 +344,72 @@ pub fn run_tool(tool_id: &str, paths: &[String]) -> Result<PathBuf, String> {
             }
         }
         _ => Err(format!("Unsupported tool: {tool_id}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_image_conversions() {
+        let temp_dir = std::env::temp_dir();
+        let src_path = temp_dir.join("shiftwheel_test_input.png");
+
+        // Create a 64x64 test image with some color & transparency
+        let mut img = image::RgbaImage::new(64, 64);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = image::Rgba([(x * 4) as u8, (y * 4) as u8, 128, 200]);
+        }
+        img.save(&src_path).expect("Failed to write test PNG");
+
+        let src_str = src_path.to_str().unwrap();
+
+        // Test JPG conversion (with white background flattening)
+        let jpg_out = convert_file(src_str, "jpg").expect("JPG conversion failed");
+        assert!(jpg_out.exists());
+        let _ = std::fs::remove_file(jpg_out);
+
+        // Test WebP conversion
+        let webp_out = convert_file(src_str, "webp").expect("WebP conversion failed");
+        assert!(webp_out.exists());
+        let _ = std::fs::remove_file(webp_out);
+
+        // Test BMP conversion
+        let bmp_out = convert_file(src_str, "bmp").expect("BMP conversion failed");
+        assert!(bmp_out.exists());
+        let _ = std::fs::remove_file(bmp_out);
+
+        // Test TIFF conversion
+        let tiff_out = convert_file(src_str, "tiff").expect("TIFF conversion failed");
+        assert!(tiff_out.exists());
+        let _ = std::fs::remove_file(tiff_out);
+
+        // Test GIF conversion
+        let gif_out = convert_file(src_str, "gif").expect("GIF conversion failed");
+        assert!(gif_out.exists());
+        let _ = std::fs::remove_file(gif_out);
+
+        // Test PDF conversion
+        let pdf_out = convert_file(src_str, "pdf").expect("PDF conversion failed");
+        assert!(pdf_out.exists());
+        let pdf_bytes = std::fs::read(&pdf_out).expect("Read PDF bytes");
+        assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
+        let _ = std::fs::remove_file(pdf_out);
+
+        // Test Tools
+        let rot_out = run_tool("image.rotate", &[src_str.to_string()]).expect("Rotate failed");
+        assert!(rot_out.exists());
+        let _ = std::fs::remove_file(rot_out);
+
+        let half_out = run_tool("image.half", &[src_str.to_string()]).expect("Half failed");
+        assert!(half_out.exists());
+        let _ = std::fs::remove_file(half_out);
+
+        let square_out = run_tool("image.square", &[src_str.to_string()]).expect("Square failed");
+        assert!(square_out.exists());
+        let _ = std::fs::remove_file(square_out);
+
+        let _ = std::fs::remove_file(src_path);
     }
 }

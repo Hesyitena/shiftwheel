@@ -18,26 +18,10 @@
     onHudHide: on('hud:hide'),
     onCropInit: on('crop:init'),
     cropDone: (rect) => invoke('crop_done', { rect }),
+    onDragEnter: on('overlay:drag_enter'),
+    onDragOver: on('overlay:drag_over'),
+    onDragDrop: on('overlay:drag_drop'),
+    onDragLeave: on('overlay:drag_leave'),
+    drop: (id, paths) => invoke('overlay_drop', { msg: { id, paths } }),
   };
-
-  // Drag and drop bridge
-  if (window.__TAURI__.window) {
-    const { getCurrentWindow } = window.__TAURI__.window;
-    const currentWin = getCurrentWindow();
-    currentWin.onDragDropEvent((event) => {
-      const payload = event.payload;
-      if (!payload) return;
-      if (payload.type === 'over') {
-        if (payload.position && typeof window.shiftwheelHandleDragOver === 'function') {
-          const x = payload.position.x / window.devicePixelRatio;
-          const y = payload.position.y / window.devicePixelRatio;
-          window.shiftwheelHandleDragOver(x, y);
-        }
-      } else if (payload.type === 'drop') {
-        const id = document.body.dataset.pick || null;
-        const paths = payload.paths || [];
-        invoke('overlay_drop', { msg: { id, paths } });
-      }
-    });
-  }
 })();
