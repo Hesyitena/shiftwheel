@@ -31,8 +31,47 @@
   .disc { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
   #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: var(--shadow); }
   .sep { stroke: var(--line); stroke-width: 1; }
-  .hl { fill: transparent; stroke: transparent; stroke-width: 6; stroke-linejoin: round; transition: fill 70ms, stroke 70ms; }
-  .seg.hover .hl { fill: var(--ink); stroke: var(--ink); }
+  .seg { transform-origin: 180px 180px; transition: transform 120ms cubic-bezier(0.2, 0.9, 0.3, 1.2); }
+  .seg.hover { transform: scale(1.025); }
+  .hl { fill: transparent; stroke: transparent; stroke-width: 6; stroke-linejoin: round; transition: fill 80ms, stroke 80ms, filter 80ms; }
+  .seg.hover .hl { fill: var(--ink); stroke: var(--ink); filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.22)); }
+
+  /* Dynamic Pointer Arrow towards hovered slice */
+  #pointerGroup {
+    pointer-events: none;
+    transform-origin: 180px 180px;
+    opacity: 0;
+    transition: transform 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), opacity 100ms ease;
+  }
+  #pointerGroup.active {
+    opacity: 1;
+  }
+  #pointerGroup.active .pointer-arrow {
+    animation: pointerPulse 650ms infinite alternate ease-in-out;
+  }
+  .pointer-head {
+    fill: var(--ink);
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
+  }
+  .pointer-dot {
+    fill: var(--sub);
+    opacity: 0.85;
+  }
+  @keyframes pointerPulse {
+    0% { transform: translateY(0); }
+    100% { transform: translateY(-4px); }
+  }
+
+  .ptr-finger {
+    display: inline-block;
+    margin-right: 4px;
+    animation: fingerNudge 450ms infinite alternate ease-in-out;
+    transform-origin: center;
+  }
+  @keyframes fingerNudge {
+    from { transform: translateX(0); }
+    to { transform: translateX(3px) scale(1.12); }
+  }
   text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
   .fmt { font-size: 12.5px; font-weight: 600; letter-spacing: .3px; }
   .name { font-size: 10.5px; font-weight: 500; fill: var(--sub); }
@@ -95,6 +134,12 @@
     <circle class="disc" cx="180" cy="180" r="146"/>
     <g id="segs"></g>
     <circle class="disc" cx="180" cy="180" r="80"/>
+    <g id="pointerGroup">
+      <g class="pointer-arrow">
+        <path d="M 180 88 L 173 100 L 180 97 L 187 100 Z" class="pointer-head" />
+        <circle cx="180" cy="103" r="2.2" class="pointer-dot" />
+      </g>
+    </g>
     <g id="hole"><circle cx="180" cy="180" r="80"/></g>
   </svg>
   <div id="center" class="idle">
@@ -179,7 +224,7 @@
       comp.attack.value = 0.001;
       comp.release.value = 0.05;
       sound.out = sound.ctx.createGain();
-      sound.out.gain.value = 1;
+      sound.out.gain.value = 0.38;
       sound.out.connect(comp).connect(sound.ctx.destination);
     }
     // A live AudioContext burns CPU constantly, so it closes after 1.5 s of silence.
@@ -218,14 +263,14 @@
     }
   }
   const SOUNDS = {
-    open: () => tone([[620, 940]], { dur: 0.08, gain: 0.38 }),
-    close: () => tone([[840, 540]], { dur: 0.085, gain: 0.36 }),
-    tick: () => tone([[1500, 1150]], { dur: 0.035, gain: 0.32, type: 'triangle', bright: 0.18 }), // moving between segments
-    switch: () => tone([1050, 1400], { dur: 0.045, gain: 0.34, type: 'triangle', step: 0.85 }), // switching wheels
-    select: () => tone([880, 1320], { dur: 0.09, gain: 0.38 }),
-    cancel: () => tone([[760, 470]], { dur: 0.12, gain: 0.34, type: 'triangle' }),
-    done: () => tone([784, 1175, 1568], { dur: 0.22, gain: 0.36, step: 0.42 }),
-    error: () => tone([523, 392], { dur: 0.15, gain: 0.42, type: 'triangle', step: 0.9 }),
+    open: () => tone([[620, 940]], { dur: 0.075, gain: 0.20 }),
+    close: () => tone([[840, 540]], { dur: 0.08, gain: 0.18 }),
+    tick: () => tone([[1500, 1150]], { dur: 0.03, gain: 0.14, type: 'triangle', bright: 0.10 }), // subtle soft tick
+    switch: () => tone([1050, 1400], { dur: 0.04, gain: 0.18, type: 'triangle', step: 0.85 }),
+    select: () => tone([880, 1320], { dur: 0.085, gain: 0.22 }),
+    cancel: () => tone([[760, 470]], { dur: 0.10, gain: 0.18, type: 'triangle' }),
+    done: () => tone([784, 1175, 1568], { dur: 0.18, gain: 0.20, step: 0.42 }),
+    error: () => tone([523, 392], { dur: 0.14, gain: 0.22, type: 'triangle', step: 0.9 }),
   };
   function play(name) {
     // Rate-limit hover ticks so sweeping across many segments doesn't get noisy
@@ -305,7 +350,18 @@
       if (thumbBox) thumbBox.style.display = 'none';
     }
 
-    // 2. Compute title and desc
+    // 2. Compute title and desc & pointer arrow
+    const pointerGroup = $('pointerGroup');
+    if (hover && hover !== hole && hover.dataset.mid !== undefined) {
+      if (pointerGroup) {
+        const rot = (parseFloat(hover.dataset.mid) + 90);
+        pointerGroup.style.transform = `rotate(${rot}deg)`;
+        pointerGroup.classList.add('active');
+      }
+    } else {
+      if (pointerGroup) pointerGroup.classList.remove('active');
+    }
+
     let t = '', d = '';
     if (empty) {
       t = empty;
@@ -315,7 +371,8 @@
       if (hover === hole) {
         d = '✕ Drop to cancel';
       } else if (hover && hover !== hole) {
-        d = hover.dataset.caption ? `➜ ${hover.dataset.caption}` : `➜ ${hover.dataset.label}`;
+        const actionLabel = hover.dataset.caption ? hover.dataset.caption : hover.dataset.label;
+        d = `<span class="ptr-finger">👉</span> ${actionLabel}`;
       } else {
         d = n > 1 ? `${n} files · Drop on a slice` : 'Drop on a slice';
       }
@@ -325,7 +382,8 @@
         d = 'Drop here to cancel';
       } else if (hover && hover !== hole) {
         t = hover.dataset.label;
-        d = hover.dataset.caption || '';
+        const actionLabel = hover.dataset.caption || hover.dataset.label;
+        d = `<span class="ptr-finger">👉</span> ${actionLabel}`;
       } else {
         t = 'Shiftwheel';
         d = 'Drop on a slice';
@@ -335,7 +393,7 @@
     center.classList.toggle('idle', !hover);
     center.classList.toggle('cancel', hover === hole);
     title.textContent = t;
-    desc.textContent = d;
+    desc.innerHTML = d;
   }
 
   function setHover(target) {
@@ -360,7 +418,7 @@
     list.forEach((item, i) => {
       const mid = -90 + i * step;
       const a1 = mid - step / 2;
-      const g = el('g', { class: 'seg', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption });
+      const g = el('g', { class: 'seg', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption, 'data-mid': mid });
       // Hit area = the full sector (transparent); highlight = the inset sector
       g.append(el('path', { d: sectorPath(a1, mid + step / 2), class: 'hl' }));
       if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
