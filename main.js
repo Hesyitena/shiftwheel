@@ -429,8 +429,13 @@ let hideTimer = null;
 let probeTimer = null;
 let probeMoves = 0;
 
-ipcMain.on('overlay:revealed', (e) => {
+ipcMain.on('overlay:revealed', (e, ok = true) => {
   if (!overlay || e.sender !== overlay.webContents) return;
+  if (!ok) {
+    drag.notFile = true;
+    hideNow();
+    return;
+  }
   revealed = true;
   clearTimeout(probeTimer);
   probeTimer = null;
@@ -621,14 +626,14 @@ uIOhook.on('mousemove', (e) => {
   drag.lastMove = now;
   const c = screen.getCursorScreenPoint();
   lastHookCursor = c;
-  if (shown && !revealed && ++probeMoves >= 2 && !probeTimer) {
+  if (shown && !revealed && ++probeMoves >= 3 && !probeTimer) {
     probeTimer = setTimeout(() => {
       probeTimer = null;
       if (shown && !revealed) {
         drag.notFile = true;
         hideNow();
       }
-    }, 65);
+    }, 220);
   }
   if (!drag.moved && dragDistance(c) >= DRAG_THRESHOLD) {
     drag.moved = true;
@@ -684,6 +689,13 @@ function rehook() {
   startHook();
 }
 
+function resetDragState() {
+  stopPending();
+  taps.reset();
+  Object.assign(drag, { down: false, moved: false, notFile: false, pending: null, preTap: null });
+  hideNow();
+}
+
 // ---------- Tray ----------
 
 function buildMenu() {
@@ -693,6 +705,7 @@ function buildMenu() {
       type: 'checkbox',
       checked: enabled,
       click: (item) => {
+        resetDragState();
         enabled = item.checked;
         enabled ? startHook() : stopHook();
       },
@@ -702,6 +715,7 @@ function buildMenu() {
       type: 'checkbox',
       checked: soundOn,
       click: (item) => {
+        resetDragState();
         soundOn = item.checked;
         saveSettings({ ...loadSettings(), sound: soundOn });
         if (overlay) overlay.webContents.send('overlay:settings', { sound: soundOn });
@@ -712,7 +726,10 @@ function buildMenu() {
       type: 'checkbox',
       checked: app.isPackaged && isAutostart(),
       enabled: app.isPackaged, // disabled in dev
-      click: (item) => setAutostart(item.checked),
+      click: (item) => {
+        resetDragState();
+        setAutostart(item.checked);
+      },
     },
     { type: 'separator' },
     { label: `Shiftwheel ${app.getVersion()}${app.isPackaged ? '' : ' (dev)'}`, enabled: false },
@@ -733,7 +750,10 @@ function createTray() {
   tray = new Tray(trayImage());
   updateProgress();
   // The menu is rebuilt on every open so the autostart state always matches the registry
-  const open = () => tray.popUpContextMenu(buildMenu());
+  const open = () => {
+    resetDragState();
+    tray.popUpContextMenu(buildMenu());
+  };
   tray.on('click', open);
   tray.on('right-click', open);
 }
