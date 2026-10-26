@@ -12,6 +12,9 @@
     "predist": "node scripts/make-ico.js",
     "dist": "electron-builder --win",
     "install-local": "node scripts/install-local.js",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "test": "node test/check.js && node test/hotkeys.test.js && node test/converter.test.js"
   },
   "build": {
@@ -59,6 +62,7 @@
     "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
     "electron": "^45.0.0",
     "electron-builder": "^26.15.3"
   }

@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' tauri: asset: data:;">
+<title>Shiftwheel</title>
+<style>
+  :root {
+    --surface: #ffffff; --line: rgba(0, 0, 0, .09); --ink: #111111; --sub: #6e6e73; --faint: #a1a1a6;
+    --invert: #ffffff; --danger: #d6361f; --shadow: 0 12px 40px rgba(0, 0, 0, .16), 0 1px 3px rgba(0, 0, 0, .10);
+    --tab: rgba(0, 0, 0, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface: #161616; --line: rgba(255, 255, 255, .10); --ink: #f5f5f7; --sub: #98989d; --faint: #636366;
+      --invert: #111111; --danger: #ff6b55; --shadow: 0 12px 40px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04);
+      --tab: rgba(255, 255, 255, .09);
+    }
+  }
+  html, body { margin: 0; width: 360px; height: 380px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+  body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  #stage { position: absolute; inset: 0; transform-origin: 180px 180px; }
+  /* Keep alpha >= 5/255 while probing so Windows DWM/WS_EX_LAYERED hit-testing reliably delivers dragenter */
+  #stage.probing { opacity: .03; background: rgba(128, 128, 128, .01); border-radius: 50%; }
+  #stage.pop { animation: pop 120ms ease-out backwards; }
+  #stage.closing { animation: out 100ms ease-in forwards; }
+  @keyframes pop { from { transform: scale(.96); opacity: 0; } }
+  @keyframes out { to { transform: scale(.98); opacity: 0; } }
+
+  svg { position: absolute; left: 0; top: 0; width: 360px; height: 360px; }
+  .disc { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: var(--shadow); }
+  .sep { stroke: var(--line); stroke-width: 1; }
+  .hl { fill: transparent; stroke: transparent; stroke-width: 6; stroke-linejoin: round; transition: fill 70ms, stroke 70ms; }
+  .seg.hover .hl { fill: var(--ink); stroke: var(--ink); }
+  text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
+  .fmt { font-size: 12.5px; font-weight: 600; letter-spacing: .3px; }
+  .name { font-size: 10.5px; font-weight: 500; fill: var(--sub); }
+  .icon { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .seg.hover text { fill: var(--invert); }
+  .seg.hover .icon { stroke: var(--invert); }
+  #hole circle { fill: transparent; }
+
+  /* Center text is HTML so it can wrap */
+  #center { position: absolute; left: 110px; top: 130px; width: 140px; height: 100px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+  #title { font-size: 15px; font-weight: 600; letter-spacing: -.1px; line-height: 1.25; }
+  #desc { margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--sub); }
+  #center.idle #title { font-size: 12px; font-weight: 500; color: var(--sub); }
+  #center.cancel #title { color: var(--danger); }
+
+  #modes {
+    position: absolute; top: 342px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
+    background: var(--surface); border-radius: 9px; box-shadow: var(--shadow); white-space: nowrap;
+  }
+  .mode { padding: 3px 9px; border-radius: 6px; font-size: 11.5px; font-weight: 500; color: var(--faint); transition: background 90ms, color 90ms; }
+  .mode kbd { font: inherit; font-size: 10.5px; margin-right: 4px; opacity: .8; }
+  .mode.on { background: var(--tab); color: var(--ink); }
+
+  @media (prefers-reduced-motion: reduce) {
+    #stage.pop, #stage.closing { animation: none; }
+    .hl, .mode { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="discShadow"></div>
+  <svg viewBox="0 0 360 360" aria-label="Shiftwheel">
+    <circle class="disc" cx="180" cy="180" r="146"/>
+    <g id="segs"></g>
+    <circle class="disc" cx="180" cy="180" r="80"/>
+    <g id="hole"><circle cx="180" cy="180" r="80"/></g>
+  </svg>
+  <div id="center" class="idle"><div id="title"></div><div id="desc"></div></div>
+  <div id="modes">
+    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Convert</div>
+    <div class="mode" data-mode="tools"><kbd>Ctrl</kbd>Tools</div>
+    <div class="mode" data-mode="actions"><kbd>Alt</kbd>Actions</div>
+  </div>
+</div>
+<script src="bridge.js"></script>
+<script>
+  // Radial wheel. Main sends the contents (config); drops are handled by preload.js.
+  const NS = 'http://www.w3.org/2000/svg';
+  const C = 180, R = 146, r = 80, INSET = 6;
+  // [singular, plural] for the center text, e.g. "1 image", "2 images"
+  const KIND = {
+    image: ['image', 'images'], pdf: ['PDF', 'PDFs'], document: ['document', 'documents'], sheet: ['spreadsheet', 'spreadsheets'],
+    slides: ['presentation', 'presentations'], audio: ['audio file', 'audio files'], video: ['video', 'videos'], unknown: ['file', 'files'],
+  };
+
+  // 24×24 line icons for the tools and actions wheels
+  const ICONS = {
+    compress: 'M4 14h6v6M20 10h-6V4M14 10l6-6M4 20l6-6',
+    half: 'M4 4h16v16H4zM4 12h8v8',
+    rotate: 'M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5',
+    gray: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 3v18M12 8h7M12 12h9M12 16h7',
+    strip: 'M3 12V4h8l9 9-8 8zM7.5 7.5h.01M3 21L21 3',
+    merge: 'M6 3v5a6 6 0 0 0 6 6v7M18 3v5a6 6 0 0 1-6 6',
+    split: 'M12 3v7M12 10l-6 6v5M12 10l6 6v5',
+    screen: 'M3 5h18v12H3zM8 21h8M12 17v4',
+    mute: 'M4 9h4l5-4v14l-5-4H4zM17 9l5 6M22 9l-5 6',
+    wave: 'M3 12h2M7 8v8M11 5v14M15 8v8M19 10v4',
+    mono: 'M4 9h4l5-4v14l-5-4H4zM17 12h4',
+    link: 'M10 14l4-4M11 7l1.5-1.5a4 4 0 0 1 5.7 5.7L16.5 13M13 17l-1.5 1.5a4 4 0 0 1-5.7-5.7L7.5 11',
+    copy: 'M8 8h12v12H8zM4 16V4h12',
+    'copy-to': 'M3 6h6l2 2h10v11H3zM12 11v6M9 14h6',
+    'move-to': 'M3 6h6l2 2h10v11H3zM8 14h7M12 11l3 3-3 3',
+    terminal: 'M3 5h18v14H3zM7 10l3 2-3 2M12 15h4',
+    folder: 'M3 6h6l2 2h10v11H3zM3 11h18',
+    flip: 'M12 3v18M9 7l-6 5 6 5zM15 7l6 5-6 5z',
+    crop: 'M6 2v16h16M2 6h16v16',
+    fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5M9 9h6v6H9z',
+    square: 'M4 4h16v16H4zM9 9h6v6H9z',
+    hash: 'M5 9h14M5 15h14M10 4L8 20M16 4l-2 16',
+    reverse: 'M7 20V4M4 7l3-3 3 3M17 4v16M14 17l3 3 3-3',
+    image: 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9h.01',
+    fast: 'M3 6l8 6-8 6zM12 6l8 6-8 6z',
+    denoise: 'M3 12c1.5-4 3-4 4.5 0s3 4 4.5 0 3-4 4.5 0 3 4 4.5 0',
+    scissors: 'M8.5 6a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M8.5 18a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M8 7.5L20 17M8 16.5L20 7',
+    fade: 'M3 19L9 5h6l6 14',
+  };
+
+  // ---------- Sound: synthesized with WebAudio, short ----------
+  // Tones >= 500 Hz so they come through laptop speakers; each tone gets an octave harmonic for presence.
+  // A limiter at the end keeps overlapping sounds from clipping.
+  const sound = { on: true, ctx: null, out: null, last: 0, close: 0 };
+  function audio() {
+    if (!sound.ctx) {
+      sound.ctx = new AudioContext();
+      const comp = sound.ctx.createDynamicsCompressor();
+      // Limiter: only kicks in near 0 dB, so normal levels are left alone
+      comp.threshold.value = -2;
+      comp.knee.value = 0;
+      comp.ratio.value = 20;
+      comp.attack.value = 0.001;
+      comp.release.value = 0.05;
+      sound.out = sound.ctx.createGain();
+      sound.out.gain.value = 1;
+      sound.out.connect(comp).connect(sound.ctx.destination);
+    }
+    // A live AudioContext burns CPU constantly, so it closes after 1.5 s of silence.
+    // Close rather than suspend on purpose: on Windows, resume gets slower the longer it slept
+    // (12 s idle -> ~440 ms), while creating a new one is a steady ~25-55 ms.
+    clearTimeout(sound.close);
+    sound.close = setTimeout(() => { if (sound.ctx) sound.ctx.close(); sound.ctx = null; }, 1500);
+    return sound.ctx;
+  }
+  function tone(notes, { dur = 0.06, gain = 0.32, type = 'sine', step = 0.6, bright = 0.22 } = {}) {
+    if (!sound.on) return;
+    const ctx = audio();
+    let t = ctx.currentTime + 0.005;
+    for (const note of notes) {
+      const [from, to] = Array.isArray(note) ? note : [note, note];
+      const amp = ctx.createGain();
+      amp.gain.setValueAtTime(0.0001, t);
+      // Fast attack, hold for ~40% of the duration, then decay: short sounds stay clearly audible
+      amp.gain.exponentialRampToValueAtTime(gain, t + 0.003);
+      amp.gain.setValueAtTime(gain, t + dur * 0.4);
+      amp.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      amp.connect(sound.out);
+      for (const [mult, level] of [[1, 1], [2, bright]]) {
+        if (!level) continue;
+        const osc = ctx.createOscillator();
+        const mix = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(from * mult, t);
+        if (to !== from) osc.frequency.exponentialRampToValueAtTime(to * mult, t + dur);
+        mix.gain.value = level;
+        osc.connect(mix).connect(amp);
+        osc.start(t);
+        osc.stop(t + dur + 0.02);
+      }
+      t += dur * step;
+    }
+  }
+  const SOUNDS = {
+    open: () => tone([[620, 940]], { dur: 0.08, gain: 0.38 }),
+    close: () => tone([[840, 540]], { dur: 0.085, gain: 0.36 }),
+    tick: () => tone([[1500, 1150]], { dur: 0.035, gain: 0.32, type: 'triangle', bright: 0.18 }), // moving between segments
+    switch: () => tone([1050, 1400], { dur: 0.045, gain: 0.34, type: 'triangle', step: 0.85 }), // switching wheels
+    select: () => tone([880, 1320], { dur: 0.09, gain: 0.38 }),
+    cancel: () => tone([[760, 470]], { dur: 0.12, gain: 0.34, type: 'triangle' }),
+    done: () => tone([784, 1175, 1568], { dur: 0.22, gain: 0.36, step: 0.42 }),
+    error: () => tone([523, 392], { dur: 0.15, gain: 0.42, type: 'triangle', step: 0.9 }),
+  };
+  function play(name) {
+    // Rate-limit hover ticks so sweeping across many segments doesn't get noisy
+    if (name === 'tick') { if (performance.now() - sound.last < 45) return; sound.last = performance.now(); }
+    if (SOUNDS[name]) SOUNDS[name]();
+  }
+
+  // ---------- Wheel ----------
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
+  const state = { config: null, mode: 'convert', category: null, count: 0 };
+  let hover = null; // highlighted segment, or the center hole (cancel)
+  let revealed = false; // stays hidden until Windows OLE confirms files are being dragged
+  let dropped = false;
+  let closeTimer = null;
+  let probeRevealTimer = null;
+  let emptyText = '';
+
+  function el(tag, attrs, text) {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text) node.textContent = text;
+    return node;
+  }
+
+  // Guess the category from the MIME type Windows gives during the drag (file names aren't readable yet)
+  function categoryOf(types) {
+    const t = types.find(Boolean) || '';
+    if (t === 'application/pdf') return 'pdf';
+    if (t.startsWith('image/')) return 'image';
+    if (t.startsWith('audio/')) return 'audio';
+    if (t.startsWith('video/')) return 'video';
+    if (/spreadsheet|excel|csv/.test(t)) return 'sheet';
+    if (/presentation|powerpoint/.test(t)) return 'slides';
+    if (/word|opendocument\.text|rtf|^text\//.test(t)) return 'document';
+    return 'unknown';
+  }
+
+  function items() {
+    const { config, mode, category, count } = state;
+    if (!config) return null;
+    if (mode === 'actions') return config.actions;
+    if (!category) return mode === 'convert' ? config.convert.fallback : null; // before dragover arrives
+    const list = mode === 'convert' ? config.convert[category] || config.convert.fallback : config.tools[category] || [];
+    return list.filter((item) => !item.multi || count > 1);
+  }
+
+  const point = (rad, deg) => [C + rad * Math.cos(deg * Math.PI / 180), C + rad * Math.sin(deg * Math.PI / 180)];
+  const fmt = (p) => p.map((v) => v.toFixed(1)).join(' ');
+
+  // Highlight: a ring sector inset INSET px from the edges, corners rounded by a thick stroke
+  function sectorPath(a1, a2) {
+    const ro = R - INSET, ri = r + INSET, d = INSET / 2 + 1;
+    const off = (rad) => Math.asin(Math.min(1, d / rad)) * 180 / Math.PI;
+    const o1 = a1 + off(ro), o2 = a2 - off(ro), i1 = a1 + off(ri), i2 = a2 - off(ri);
+    return `M${fmt(point(ro, o1))}A${ro} ${ro} 0 ${o2 - o1 > 180 ? 1 : 0} 1 ${fmt(point(ro, o2))}` +
+      `L${fmt(point(ri, i2))}A${ri} ${ri} 0 ${i2 - i1 > 180 ? 1 : 0} 0 ${fmt(point(ri, i1))}Z`;
+  }
+
+  function paintCenter() {
+    let t = '', d = '';
+    if (hover === hole) { t = 'Cancel'; d = 'Drop here'; }
+    else if (hover) { t = hover.dataset.label; d = hover.dataset.caption; }
+    else if (emptyText) t = emptyText;
+    else if (state.category) { const n = state.count || 1; t = `${n} ${KIND[state.category][n === 1 ? 0 : 1]}`; }
+    center.classList.toggle('idle', !hover);
+    center.classList.toggle('cancel', hover === hole);
+    title.textContent = t;
+    desc.textContent = d === t ? '' : d;
+  }
+
+  function setHover(target) {
+    if (target === hover) return;
+    if (hover && hover !== hole) hover.classList.remove('hover');
+    hover = target;
+    if (hover && hover !== hole) {
+      hover.classList.add('hover');
+      play('tick');
+    }
+    // preload.js reads this on drop, so what is highlighted is what runs
+    document.body.dataset.pick = hover && hover !== hole ? hover.dataset.id : '';
+    paintCenter();
+  }
+
+  function render() {
+    hover = null;
+    document.body.dataset.pick = '';
+    segs.replaceChildren();
+    for (const m of document.querySelectorAll('.mode')) m.classList.toggle('on', m.dataset.mode === state.mode);
+    const all = items();
+    const list = all || [];
+    emptyText = all && !list.length
+      ? (state.mode === 'tools' ? `No tools for ${KIND[state.category][1]} yet` : 'Nothing here yet')
+      : '';
+    const step = 360 / list.length;
+    list.forEach((item, i) => {
+      const mid = -90 + i * step;
+      const a1 = mid - step / 2;
+      const g = el('g', { class: 'seg', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption });
+      // Hit area = the full sector (transparent); highlight = the inset sector
+      g.append(el('path', { d: sectorPath(a1, mid + step / 2), class: 'hl' }));
+      if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
+      const [x, y] = point((R + r) / 2, mid);
+      if (ICONS[item.icon]) {
+        // Long labels wrap onto two lines so they fit on wheels with many segments
+        const words = item.label.split(' ');
+        const lines = item.label.length > 9 && words.length > 1 ? [words[0], words.slice(1).join(' ')] : [item.label];
+        const lift = (lines.length - 1) * 6;
+        g.append(el('path', { class: 'icon', d: ICONS[item.icon], transform: `translate(${(x - 9).toFixed(1)} ${(y - 17 - lift).toFixed(1)}) scale(.75)` }));
+        const text = el('text', { class: 'name', x, y: y + 11 - lift });
+        lines.forEach((line, j) => text.append(el('tspan', { x, dy: j ? 12 : 0 }, line)));
+        g.append(text);
+      } else {
+        g.append(el('text', { class: 'fmt', x, y }, item.label));
+      }
+      segs.append(g);
+    });
+    paintCenter();
+  }
+
+  function revealWheel() {
+    if (revealed) return;
+    revealed = true;
+    clearTimeout(probeRevealTimer);
+    stage.classList.remove('probing', 'pop');
+    void stage.offsetWidth; // restart the animation
+    stage.classList.add('pop');
+    play('open');
+    render();
+    window.shiftwheel.revealed();
+  }
+
+  function onFileDrag(e) {
+    const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
+    if (!types.includes('Files')) {
+      clearTimeout(probeRevealTimer);
+      window.shiftwheel.revealed(false);
+      return;
+    }
+    if (state.category === null) {
+      const files = [...(e.dataTransfer.items || [])].filter((i) => i.kind === 'file');
+      state.count = files.length || 1;
+      state.category = categoryOf(files.map((i) => i.type));
+      render();
+    }
+    revealWheel();
+    // The whole sector is the hit area, not just the text/highlight
+    setHover(segmentAt(e.clientX, e.clientY));
+  }
+  document.addEventListener('dragenter', onFileDrag);
+  document.addEventListener('dragover', onFileDrag);
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) setHover(null); });
+  document.addEventListener('drop', () => {
+    clearTimeout(closeTimer);
+    clearTimeout(probeRevealTimer);
+    if (dropped) return;
+    dropped = true;
+    play(hover && hover !== hole ? 'select' : hover === hole ? 'cancel' : 'close');
+  });
+
+  // Find the segment from the cursor's angle and distance to the center
+  window.shiftwheelHandleDragOver = function(x, y) { revealWheel(); setHover(segmentAt(x, y)); };
+  function segmentAt(x, y) {
+    const dist = Math.hypot(x - C, y - C);
+    if (dist < r) return hole;
+    const list = segs.querySelectorAll('.seg');
+    if (dist > R + 4 || !list.length) return null;
+    const angle = (Math.atan2(y - C, x - C) * 180 / Math.PI + 90 + 360 / list.length / 2 + 360) % 360;
+    return list[Math.floor(angle / (360 / list.length))] || null;
+  }
+
+  window.shiftwheel.onConfig((config) => { state.config = config; render(); });
+  window.shiftwheel.onSettings((s) => { sound.on = Boolean(s && s.sound); });
+  window.shiftwheel.onSound(play);
+
+  // The wheel probes silently on fresh open until dragenter/dragover confirms a file drag
+  window.shiftwheel.onShow(({ mode, fresh }) => {
+    state.mode = mode;
+    dropped = false;
+    clearTimeout(closeTimer);
+    clearTimeout(probeRevealTimer);
+    stage.classList.remove('closing');
+    if (fresh) {
+      revealed = false;
+      state.category = null;
+      state.count = 0;
+      stage.classList.remove('pop');
+      stage.classList.add('probing');
+      render();
+      probeRevealTimer = setTimeout(revealWheel, 80);
+      return;
+    }
+    if (revealed) play('switch');
+    render();
+  });
+
+  // Mouse released: the picked segment stays lit while the wheel fades.
+  // uiohook's mouseup arrives slightly before Windows delivers the DOM drop event,
+  // so if a segment/hole is hovered we wait briefly for drop before falling back to 'close'.
+  window.shiftwheel.onClose(() => {
+    clearTimeout(probeRevealTimer);
+    if (!revealed) return;
+    stage.classList.add('closing');
+    if (dropped) return;
+    if (!hover) {
+      dropped = true;
+      play('close');
+    } else {
+      clearTimeout(closeTimer);
+      closeTimer = setTimeout(() => {
+        if (!dropped) {
+          dropped = true;
+          play('close');
+        }
+      }, 60);
+    }
+  });
+</script>
+</body>
+</html>
