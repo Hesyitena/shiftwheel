@@ -8,7 +8,7 @@ rust-version = "1.90"
 
 [lib]
 name = "app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.4", features = [] }
@@ -20,11 +20,18 @@ log = "0.4"
 tauri = { version = "2.12.5", features = ["tray-icon", "image-png", "image-ico"] }
 tauri-plugin-log = "2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "bmp", "tiff", "gif"] }
+lopdf = { version = "0.46.0", default-features = false }
+
+[dev-dependencies]
+tauri = { version = "2.12.5", features = ["tray-icon", "image-png", "image-ico", "test"] }
+
+[target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
     "Win32_System_Threading",
     "Win32_System_DataExchange",
     "Win32_System_Memory",

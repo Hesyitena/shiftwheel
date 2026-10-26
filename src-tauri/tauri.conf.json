@@ -21,7 +21,9 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": false,
-        "shadow": false
+        "shadow": false,
+        "focus": false,
+        "focusable": false
       },
       {
         "label": "hud",
@@ -35,7 +37,9 @@
         "skipTaskbar": true,
         "resizable": false,
         "visible": false,
-        "shadow": false
+        "shadow": false,
+        "focus": false,
+        "focusable": false
       },
       {
         "label": "crop",

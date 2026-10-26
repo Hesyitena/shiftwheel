@@ -66,17 +66,10 @@ fn action(id: &str, label: &str, caption: &str, icon: &str) -> WheelItem {
 
 pub fn get_wheel_config() -> WheelConfig {
     let mut convert = HashMap::new();
+    // Plain-text files with other extensions (.json, .log, .xml, code, ...).
     convert.insert(
-        "fallback".into(),
-        vec![
-            conv("pdf", None),
-            conv("docx", None),
-            conv("txt", None),
-            conv("jpg", None),
-            conv("png", None),
-            conv("mp3", None),
-            conv("mp4", None),
-        ],
+        "text".into(),
+        vec![conv("pdf", None), conv("docx", None), conv("odt", None), conv("txt", None)],
     );
     convert.insert(
         "image".into(),

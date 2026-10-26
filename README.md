@@ -20,7 +20,7 @@
 
 Tap another key mid-drag to switch wheels. Drop on the center hole, release outside the wheel, or press <kbd>Esc</kbd> to cancel. Output files are saved next to the original (`report.pdf`, `photo (compressed).jpg`, `name (1).ext`) — originals are never modified or overwritten.
 
-Jobs that take longer than 600 ms show a small progress card in the bottom-right corner. Clicking the completion notification highlights the new file in Explorer.
+Every job shows a small progress card in the bottom-right corner (above the taskbar). When it finishes, the card says what was saved — or why it failed — and clicking it highlights the new file in Explorer. Jobs run one after another, so dropping more files while one is running simply queues them.
 
 ---
 
@@ -28,18 +28,22 @@ Jobs that take longer than 600 ms show a small progress card in the bottom-right
 
 | Input | From | To | Backend |
 |---|---|---|---|
-| **Images** | `png` `jpg` `webp` `gif` `tiff` `avif` `bmp` `heic` `svg` | `JPG` `PNG` `WEBP` `AVIF` `TIFF` `GIF` `BMP` `PDF` `TXT` | Rust (`image` crate), Windows OCR (`bmp`/`heic` via `ffmpeg`) |
-| **PDF** | `pdf` | `DOCX` `TXT` `JPG` `PNG` | LibreOffice, `pdftoppm`, Windows OCR |
+| **Images** | `png` `jpg` `webp` `gif` `tiff` `avif` `bmp` `heic` `svg` | `JPG` `PNG` `WEBP` `AVIF` `TIFF` `GIF` `BMP` `PDF` `TXT` | Rust (`image` crate); `heic`/`avif`/`svg` input and `AVIF` output via `ffmpeg`; `TXT` via Windows OCR |
+| **PDF** | `pdf` | `DOCX` `TXT` `JPG` `PNG` | LibreOffice; Poppler (`pdftotext`, `pdftoppm`) when installed |
 | **Documents** | `doc` `docx` `odt` `rtf` `txt` `html` `md` | `PDF` `DOCX` `ODT` `RTF` `TXT` `HTML` | LibreOffice |
 | **Spreadsheets** | `xls` `xlsx` `ods` `csv` | `PDF` `XLSX` `ODS` `CSV` | LibreOffice |
 | **Presentations** | `ppt` `pptx` `odp` | `PDF` `PPTX` `ODP` | LibreOffice |
 | **Audio** | `mp3` `m4a` `wav` `flac` `ogg` `opus` `aiff` `wma` `aac` | `MP3` `M4A` `WAV` `FLAC` `OGG` `OPUS` `AIFF` | `ffmpeg` |
 | **Video** | `mp4` `mov` `mkv` `webm` `avi` `wmv` `m4v` | `MP4` `MOV` `MKV` `WEBM` `GIF` `MP3` | `ffmpeg` |
+| **Other text files** | `json` `log` `xml` `yaml`, source code, … | `PDF` `DOCX` `ODT` `TXT` | LibreOffice |
 
-- **Image → JPG**: applies EXIF orientation, flattens alpha onto white, high-quality JPEG.
+The wheel never offers the format a file already has (no `PNG → PNG`), and folders or unknown binary files get no conversions.
+
+- **Images**: EXIF orientation is applied (phone photos come out upright). JPG flattens transparency onto white (quality 90).
+- **Image → PDF**: one A4 page (turned to match the image), image centered; small images are not blown up.
 - **Image → TXT**: uses Windows' built-in offline OCR. Small images are upscaled 2× first so small type stays readable. Images with no text are rejected instead of writing an empty file.
-- **PDF → JPG / PNG**: 150 DPI per page (`name.jpg` for 1 page; `name 1.jpg`, `name 2.jpg`, … for multiple pages).
-- **PDF → TXT**: extracts text frames through FODT sorted by page position so columns and tables read left-to-right. Scanned PDFs with no text layer automatically fall back to 200 DPI rendering + Windows OCR.
+- **PDF → JPG / PNG**: 150 DPI per page with Poppler (`name.png` for 1 page; `name (page 1).png`, `name (page 2).png`, … for more). Without Poppler, LibreOffice renders the first page only.
+- **PDF → TXT**: Poppler's `pdftotext` when installed; otherwise LibreOffice's PDF import, with the text frames sorted by page and position. Scanned PDFs without a text layer report that instead of writing an empty file.
 - **Video**: `MP4`/`MOV`/`MKV` use H.264 + AAC (CRF 20). `WEBM` uses VP9 + Opus. `GIF` is 12 fps, max 480 px wide.
 
 ---
@@ -48,10 +52,10 @@ Jobs that take longer than 600 ms show a small progress card in the bottom-right
 
 | Category | Available tools |
 |---|---|
-| **Images** | **Compress** (max 2560 px; skipped if not smaller) · **50%** scale · **Rotate** 90° · **Grayscale** · **Mirror** · **Crop** (interactive editor with `Free`, `1:1`, `4:3`, `3:2`, `16:9`, `9:16` presets) · **Trim edges** (cuts solid borders on screenshots/scans) · **Square** (`1:1` center crop) |
-| **PDF** | **Merge** *(2+ PDFs)* · **Split** into single-page PDFs · **Rotate** all pages 90° |
-| **Video** | **Compress** (max 1080p, CRF 28) · **720p** · **Mute** (stream copy, no re-encode) · **Rotate** 90° · **Extract Audio** (saves sound as `.mp3`) · **2× speed** |
-| **Audio** | **Compress** (128 kbps MP3) · **Mono** · **Cut edges** (trim silence) · **2× speed** · **Fade** in/out |
+| **Images** | **Compress** (max 2560 px; skipped if not smaller) · **50%** size · **Fit 1080p** (only scales down) · **Square** (`1:1` center crop) · **Crop** (interactive editor with `Free`, `1:1`, `4:3`, `3:2`, `16:9`, `9:16` presets; one crop for all selected images) · **Rotate** 90° · **Flip** (mirror) · **Black & white** · **Trim border** (cuts plain margins on screenshots/scans) · **To PDF** *(2+ images, one page each)* |
+| **PDF** | **Compress** (skipped if not smaller) · **Extract pages** (one PDF per page) · **Extract images** (pages as PNG, needs Poppler) · **Merge** *(2+ PDFs)* |
+| **Audio** | **Cut edges** (trim silence) · **Fade** in/out · **2× speed** (same pitch) · **To mono** |
+| **Video** | **Remove audio** (stream copy, no re-encode) · **Extract audio** (`.mp3`) · **2× speed** · **720p** (only scales down) · **Reverse** |
 
 ---
 
@@ -69,12 +73,13 @@ Works on files, folders, or mixed selections:
 
 ## Helper Programs
 
-Image conversions, image tools, and Windows actions need nothing extra. For office documents and video conversions, Shiftwheel looks for these tools in standard paths and `PATH`:
+Image conversions, image tools, PDF merge/split/compress, and Windows actions need nothing extra. For the rest, Shiftwheel looks for these programs on `PATH` and in their usual install folders (`Program Files`, WinGet, Scoop, Chocolatey). When one is missing, the progress card says which one:
 
 | Program | Needed for | Install |
 |---|---|---|
-| [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) | Audio & video conversions, `BMP`/`HEIC` | `winget install Gyan.FFmpeg` |
-| [LibreOffice](https://www.libreoffice.org/download/) | Office documents (`DOCX`, `XLSX`, `PPTX` to `PDF`) | `winget install TheDocumentFoundation.LibreOffice` |
+| [FFmpeg](https://www.gyan.dev/ffmpeg/builds/) | Audio & video, `AVIF` output, `HEIC`/`AVIF`/`SVG` input | `winget install Gyan.FFmpeg` |
+| [LibreOffice](https://www.libreoffice.org/download/) | Office documents (`DOCX`, `XLSX`, `PPTX` to `PDF`), `PDF → DOCX` | `winget install TheDocumentFoundation.LibreOffice` |
+| [Poppler](https://github.com/oschwartz10612/poppler-windows) *(optional)* | Better `PDF → TXT`, all pages for `PDF → JPG/PNG` and **Extract images** | `winget install oschwartz10612.Poppler` |
 | Windows OCR | `Image → TXT`, scanned `PDF → TXT` | Built into Windows 10/11 |
 
 ---
@@ -109,7 +114,8 @@ Output installer is placed at `src-tauri/target/release/bundle/nsis/Shiftwheel_1
 |---|---|
 | `npm run dev` | Run Shiftwheel with Tauri dev mode |
 | `npm run build` | Build optimized release binary (`src-tauri/target/release/shiftwheel.exe`) |
-| `npm run dist` | Build complete NSIS setup installer (`1.29 MB`) |
+| `npm run dist` | Build complete NSIS setup installer |
+| `npm test` | Rust tests (incl. end-to-end jobs with real FFmpeg/LibreOffice/Poppler when installed) + UI tests in Chromium |
 
 ---
 

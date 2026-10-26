@@ -6,17 +6,17 @@
 <title>Shiftwheel</title>
 <style>
   :root {
-    --surface: #ffffff; --line: rgba(0, 0, 0, .09); --ink: #111111; --sub: #6e6e73; --track: rgba(0, 0, 0, .07);
+    --surface: #ffffff; --line: rgba(0, 0, 0, .09); --ink: #111111; --sub: #6e6e73; --track: rgba(0, 0, 0, .07); --danger: #d6361f;
     --shadow: 0 12px 40px rgba(0, 0, 0, .16), 0 1px 3px rgba(0, 0, 0, .10);
   }
   @media (prefers-color-scheme: dark) {
-    :root { --surface: #161616; --line: rgba(255, 255, 255, .10); --ink: #f5f5f7; --sub: #98989d; --track: rgba(255, 255, 255, .10);
+    :root { --surface: #161616; --line: rgba(255, 255, 255, .10); --ink: #f5f5f7; --sub: #98989d; --track: rgba(255, 255, 255, .10); --danger: #ff6b55;
       --shadow: 0 12px 40px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04); }
   }
   html, body { margin: 0; width: 340px; height: 92px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
   body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
   #card {
-    position: absolute; left: 12px; right: 12px; bottom: 14px; height: 54px; box-sizing: border-box; padding: 0 16px;
+    position: absolute; left: 12px; right: 12px; bottom: 14px; min-height: 54px; box-sizing: border-box; padding: 9px 16px;
     display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 14px;
     background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden;
     transition: transform 160ms ease-out, opacity 160ms ease-out;
@@ -25,10 +25,16 @@
   #text { min-width: 0; }
   #name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #sub { margin-top: 1px; font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #detail { margin-top: 1px; font-size: 11px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #detail:empty { display: none; }
+  body.error #sub, body.error #detail { color: var(--danger); }
+  body.error #bar i { background: var(--danger); }
+  body.clickable #card { cursor: pointer; }
+  body.clickable #card:hover { box-shadow: var(--shadow), 0 0 0 1px var(--line); }
   #pct { font-size: 12px; font-weight: 500; color: var(--sub); font-variant-numeric: tabular-nums; }
   #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--track); }
   #bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--ink); transition: width 160ms linear; }
-  /* No percentage (LibreOffice, sharp, OCR): a small moving sliver */
+  /* No percentage (LibreOffice, ffmpeg, OCR): a small moving sliver */
   #bar.busy i { width: 24%; animation: busy 1.2s ease-in-out infinite; transition: none; }
   @keyframes busy { from { left: -24%; } to { left: 100%; } }
   @media (prefers-reduced-motion: reduce) { #bar.busy i { animation: none; left: 0; width: 100%; opacity: .3; } #card { transition: none; } }
@@ -36,7 +42,7 @@
 </head>
 <body class="hidden">
 <div id="card">
-  <div id="text"><div id="name"></div><div id="sub"></div></div>
+  <div id="text"><div id="name"></div><div id="sub"></div><div id="detail"></div></div>
   <div id="pct"></div>
   <div id="bar"><i></i></div>
 </div>
@@ -47,13 +53,23 @@
   const fill = document.querySelector('#bar i');
 
   window.shiftwheel.onHud((s) => {
-    document.body.classList.remove('hidden');
+    const body = document.body;
+    body.classList.remove('hidden');
+    body.classList.toggle('error', s.state === 'error');
+    body.classList.toggle('clickable', Boolean(s.clickable));
+    $('card').title = s.clickable ? 'Show in Explorer' : '';
     $('name').textContent = s.name;
-    $('sub').textContent = s.total > 1 ? `${s.label}  ·  ${s.index} of ${s.total}` : s.label;
+    $('sub').textContent = s.state === 'busy' && s.total > 1 ? `${s.label}  ·  ${s.index} of ${s.total}` : s.label;
+    $('detail').textContent = s.detail || '';
     const known = typeof s.percent === 'number';
     $('bar').classList.toggle('busy', !known);
     fill.style.width = known ? `${Math.round(s.percent * 100)}%` : '';
-    $('pct').textContent = known ? `${Math.round(s.percent * 100)}%` : '';
+    $('pct').textContent = known && s.state === 'busy' ? `${Math.round(s.percent * 100)}%` : '';
+  });
+
+  // Click the finished card to see the result in Explorer
+  $('card').addEventListener('click', () => {
+    if (document.body.classList.contains('clickable')) window.shiftwheel.hudReveal();
   });
 
   window.shiftwheel.onHudHide(() => document.body.classList.add('hidden'));

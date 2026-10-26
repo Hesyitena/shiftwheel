@@ -9,26 +9,32 @@ npm install          # installs @tauri-apps/cli only
 npm run dev          # tauri dev
 npm run build        # release binary
 npm run dist         # NSIS installer
-cd src-tauri && cargo test   # converter unit tests (image conversions)
+npm test             # all tests (Rust + UI)
+npm run test:rust    # cargo test (unit + end-to-end job tests)
+npm run test:ui      # overlay/HUD/crop pages in Chromium (needs Playwright + Chromium)
 ```
 
-The crate depends on `windows-sys` and Win32 APIs, so it only builds for a Windows target. On Linux/macOS use `cargo check --target x86_64-pc-windows-msvc` (or `-gnu`) at most.
+The app targets Windows, but the crate also builds on Linux/macOS (Win32 code is behind `cfg(windows)`), so tests run anywhere. End-to-end job tests use the real FFmpeg / LibreOffice / Poppler when installed and skip themselves otherwise. To exercise the Win32 code from Linux: `cargo test --no-run --target x86_64-pc-windows-gnu` (needs mingw-w64) and run the test exe under Wine.
 
 ## Layout
 
-- `src-tauri/src/lib.rs` – app setup, overlay `DragDrop` handler, `resolve_segment` (hit-testing in Rust), `execute_action` (runs the job on a worker thread and drives the HUD).
-- `src-tauri/src/hook.rs` – global `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks on their own thread. Detects "mouse down + drag + modifier tap" and emits `HookEvent`s.
-- `src-tauri/src/window_manager.rs` – positions/shows the `overlay` and `hud` windows.
-- `src-tauri/src/config.rs` – wheel contents (`convert:<fmt>`, `tool:<cat>.<id>`, `action:<id>`), sent to the overlay as `overlay:config`.
-- `src-tauri/src/converter.rs` – conversions (`image` crate, ffmpeg, LibreOffice `soffice`) and `run_tool`.
-- `src-tauri/src/actions.rs` – clipboard (text, `CF_HDROP`), copy/move to folder, terminal, reveal in Explorer.
-- `src-tauri/src/settings.rs` – `%APPDATA%\Shiftwheel\settings.json` + autostart registry key.
-- `src-tauri/src/tray.rs` – tray menu.
-- `ui/` – static frontend (no bundler): `overlay.html` (wheel), `hud.html` (progress card), `crop.html` (crop editor, not wired up yet), `bridge.js` (Tauri event/invoke wrapper as `window.shiftwheel`).
+- `src-tauri/src/lib.rs` – app setup, commands (`commands()`), overlay drag-drop handling, hook event handling, `TauriUi` (the job UI backed by real windows).
+- `src-tauri/src/hook.rs` – global `WH_MOUSE_LL` / `WH_KEYBOARD_LL` hooks. Logic is the pure `Machine`; the hook procedures only feed it and send events through a channel.
+- `src-tauri/src/wheel.rs` – which slices a selection gets (`items_for`) and hit-testing (`resolve`). The overlay draws exactly this list.
+- `src-tauri/src/jobs.rs` – job queue (one worker thread), `run_job`, progress/result messages, the `Ui` trait.
+- `src-tauri/src/converter.rs` – conversions and tools. `imaging.rs` (load with EXIF / save per format / PDF from images), `pdfops.rs` (lopdf merge/split/compress), `fodt.rs` (PDF text via LibreOffice), `external.rs` (finding and running ffmpeg/soffice/pdftoppm without console windows).
+- `src-tauri/src/actions.rs` – clipboard, copy/move to folder (recursive), terminal, reveal in Explorer.
+- `src-tauri/src/window_manager.rs` – overlay/HUD placement in physical pixels using the target monitor's DPI and work area.
+- `src-tauri/src/config.rs` – wheel contents (`convert:<fmt>`, `tool:<cat>.<id>`, `action:<id>`).
+- `src-tauri/src/e2e.rs` – end-to-end tests: drop position → slice → job with real helper programs → output checked; IPC contract tests.
+- `ui/` – static pages (no bundler): `overlay.html`, `hud.html`, `crop.html`, `bridge.js` (`window.shiftwheel`).
+- `tests/ui-e2e.mjs` – UI tests with a recording fake of the Tauri bridge.
 
 ## Conventions and gotchas
 
-- The wheel geometry (center 180, inner radius 80, outer 146, hit radius 166) is duplicated in `lib.rs::resolve_segment` and `overlay.html::segmentAt`. Keep them in sync.
-- Item ids in `config.rs` must have a matching branch in `converter::run_tool` / `execute_action`, otherwise the slice shows up but fails at runtime.
-- Output files go next to the source and use `actions::unique_path`. Never overwrite the source or an existing file.
-- Code in the hook procedures runs inside Windows' low-level hook callback. Keep it fast and never block on the Tauri main thread there.
+- Wheel geometry (center 180, inner radius 80, outer 146, hit radius 166) lives in `wheel.rs` and `overlay.html::segmentAt`. The UI test checks them point by point against vectors exported from Rust.
+- Every id in `config.rs` needs an implementation (`jobs::known_tool` / `known_action`); a test enforces it.
+- Outputs go next to the source through `actions::unique_path`. Never overwrite the source or an existing file (LibreOffice writes into a temp folder first for this reason).
+- The hook procedures run inside Windows' input pipeline: keep them fast, never call into Tauri or block there.
+- Events and commands used by `bridge.js` must exist in Rust; `ipc_names_match_between_bridge_and_backend` checks this.
+- Tray check items are toggled by the menu itself before the event arrives: read `is_checked()`, don't flip it again.

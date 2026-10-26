@@ -81,8 +81,8 @@
 </footer>
 <script src="bridge.js"></script>
 <script>
-  // Crop editor. The selection is kept normalized (0..1 of the image) so it can be applied to the
-  // full-size original in main, and to several images at once.
+  // Crop editor. The selection is kept normalized (0..1 of the image) so the backend can apply
+  // it to the full-size originals, and to several images at once.
   const $ = (id) => document.getElementById(id);
   const frame = $('frame'), box = $('box'), img = $('img');
   const MIN = 0.02; // smallest selection, as a fraction of the image
@@ -164,7 +164,9 @@
     const p = toNorm(e);
     const handle = e.target.dataset && e.target.dataset.h;
     if (handle) drag = { kind: 'resize', handle, start: { ...rect } };
-    else if (e.target === box || box.contains(e.target)) drag = { kind: 'move', p0: p, start: { ...rect } };
+    // Inside the selection moves it, unless it still covers the whole image: then a drag draws
+    // a new one (otherwise "drag to select" would do nothing on a fresh image).
+    else if ((e.target === box || box.contains(e.target)) && !(rect.w > 0.999 && rect.h > 0.999)) drag = { kind: 'move', p0: p, start: { ...rect } };
     else drag = { kind: 'draw', ax: p.x, ay: p.y }; // start a new selection
   });
 
@@ -197,7 +199,13 @@
 
   for (const b of document.querySelectorAll('.ratio')) b.addEventListener('click', () => applyRatio(Number(b.dataset.r)));
 
-  const finish = (result) => window.shiftwheel.cropDone(result);
+  // One answer per request (Enter + click, or a key repeat, must not send twice)
+  let pending = false;
+  const finish = (result) => {
+    if (!pending) return;
+    pending = false;
+    window.shiftwheel.cropDone(result);
+  };
   $('cancel').addEventListener('click', () => finish(null));
   $('save').addEventListener('click', () => finish(rect));
   window.addEventListener('keydown', (e) => {
@@ -206,7 +214,9 @@
   });
   window.addEventListener('resize', layout);
 
-  window.shiftwheel.onCropInit((d) => {
+  function init(d) {
+    if (!d) return;
+    pending = true;
     W = d.width;
     H = d.height;
     img.src = d.src;
@@ -216,7 +226,10 @@
     layout();
     applyRatio(0);
     $('save').focus();
-  });
+  }
+  window.shiftwheel.onCropInit(init);
+  // The request may have been sent before this page finished loading
+  window.shiftwheel.getCropRequest().then(init).catch(() => {});
 </script>
 </body>
 </html>

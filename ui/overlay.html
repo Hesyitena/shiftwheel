@@ -73,23 +73,24 @@
   </svg>
   <div id="center" class="idle"><div id="title"></div><div id="desc"></div></div>
   <div id="modes">
-    <div class="mode" data-mode="convert"><kbd>â‡§</kbd>Convert</div>
+    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Convert</div>
     <div class="mode" data-mode="tools"><kbd>Ctrl</kbd>Tools</div>
     <div class="mode" data-mode="actions"><kbd>Alt</kbd>Actions</div>
   </div>
 </div>
 <script src="bridge.js"></script>
 <script>
-  // Radial wheel. Main sends the contents (config); drops are handled by preload.js.
+  // Radial wheel. The backend sends the slices and handles the drop.
   const NS = 'http://www.w3.org/2000/svg';
   const C = 180, R = 146, r = 80, INSET = 6;
   // [singular, plural] for the center text, e.g. "1 image", "2 images"
   const KIND = {
     image: ['image', 'images'], pdf: ['PDF', 'PDFs'], document: ['document', 'documents'], sheet: ['spreadsheet', 'spreadsheets'],
-    slides: ['presentation', 'presentations'], audio: ['audio file', 'audio files'], video: ['video', 'videos'], unknown: ['file', 'files'],
+    slides: ['presentation', 'presentations'], audio: ['audio file', 'audio files'], video: ['video', 'videos'],
+    text: ['text file', 'text files'], folder: ['folder', 'folders'], unknown: ['file', 'files'],
   };
 
-  // 24Ã—24 line icons for the tools and actions wheels
+  // 24×24 line icons for the tools and actions wheels
   const ICONS = {
     compress: 'M4 14h6v6M20 10h-6V4M14 10l6-6M4 20l6-6',
     half: 'M4 4h16v16H4zM4 12h8v8',
@@ -191,15 +192,13 @@
   }
 
   // ---------- Wheel ----------
+  // The backend decides which slices a selection gets (and resolves the drop with the same
+  // list and geometry), so this page only draws `state.items` and tracks the hover.
   const $ = (id) => document.getElementById(id);
   const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
-  const state = { config: null, mode: 'convert', category: null, count: 0 };
+  const state = { mode: 'convert', category: null, count: 0, items: null };
   let hover = null; // highlighted segment, or the center hole (cancel)
-  let revealed = false; // stays hidden until Windows OLE confirms files are being dragged
-  let dropped = false;
-  let closeTimer = null;
-  let probeRevealTimer = null;
-  let emptyText = '';
+  let revealed = false; // stays invisible until the backend reports a file drag over the wheel
 
   function el(tag, attrs, text) {
     const node = document.createElementNS(NS, tag);
@@ -208,30 +207,9 @@
     return node;
   }
 
-  // Guess the category from the MIME type Windows gives during the drag (file names aren't readable yet)
-  function categoryOf(types) {
-    const t = types.find(Boolean) || '';
-    if (t === 'application/pdf') return 'pdf';
-    if (t.startsWith('image/')) return 'image';
-    if (t.startsWith('audio/')) return 'audio';
-    if (t.startsWith('video/')) return 'video';
-    if (/spreadsheet|excel|csv/.test(t)) return 'sheet';
-    if (/presentation|powerpoint/.test(t)) return 'slides';
-    if (/word|opendocument\.text|rtf|^text\//.test(t)) return 'document';
-    return 'unknown';
-  }
-
-  function items() {
-    const { config, mode, category, count } = state;
-    if (!config) return null;
-    if (mode === 'actions') return config.actions;
-    if (!category) return mode === 'convert' ? config.convert.fallback : null; // before dragover arrives
-    const list = mode === 'convert' ? config.convert[category] || config.convert.fallback : config.tools[category] || [];
-    return list.filter((item) => !item.multi || count > 1);
-  }
-
   const point = (rad, deg) => [C + rad * Math.cos(deg * Math.PI / 180), C + rad * Math.sin(deg * Math.PI / 180)];
   const fmt = (p) => p.map((v) => v.toFixed(1)).join(' ');
+  const kind = (n) => (KIND[state.category] || KIND.unknown)[n === 1 ? 0 : 1];
 
   // Highlight: a ring sector inset INSET px from the edges, corners rounded by a thick stroke
   function sectorPath(a1, a2) {
@@ -242,12 +220,20 @@
       `L${fmt(point(ri, i2))}A${ri} ${ri} 0 ${i2 - i1 > 180 ? 1 : 0} 0 ${fmt(point(ri, i1))}Z`;
   }
 
+  function emptyText() {
+    if (!state.items || state.items.length) return '';
+    if (state.mode === 'tools') return `No tools for ${kind(2)} yet`;
+    if (state.mode === 'convert') return state.category === 'folder' ? 'Folders can’t be converted' : 'Can’t convert this file type';
+    return 'Nothing here yet';
+  }
+
   function paintCenter() {
     let t = '', d = '';
+    const empty = emptyText();
     if (hover === hole) { t = 'Cancel'; d = 'Drop here'; }
     else if (hover) { t = hover.dataset.label; d = hover.dataset.caption; }
-    else if (emptyText) t = emptyText;
-    else if (state.category) { const n = state.count || 1; t = `${n} ${KIND[state.category][n === 1 ? 0 : 1]}`; }
+    else if (empty) t = empty;
+    else if (state.category) { const n = state.count || 1; t = `${n} ${kind(n)}`; }
     center.classList.toggle('idle', !hover);
     center.classList.toggle('cancel', hover === hole);
     title.textContent = t;
@@ -262,7 +248,6 @@
       hover.classList.add('hover');
       play('tick');
     }
-    // preload.js reads this on drop, so what is highlighted is what runs
     document.body.dataset.pick = hover && hover !== hole ? hover.dataset.id : '';
     paintCenter();
   }
@@ -272,11 +257,7 @@
     document.body.dataset.pick = '';
     segs.replaceChildren();
     for (const m of document.querySelectorAll('.mode')) m.classList.toggle('on', m.dataset.mode === state.mode);
-    const all = items();
-    const list = all || [];
-    emptyText = all && !list.length
-      ? (state.mode === 'tools' ? `No tools for ${KIND[state.category][1]} yet` : 'Nothing here yet')
-      : '';
+    const list = state.items || [];
     const step = 360 / list.length;
     list.forEach((item, i) => {
       const mid = -90 + i * step;
@@ -306,45 +287,14 @@
   function revealWheel() {
     if (revealed) return;
     revealed = true;
-    clearTimeout(probeRevealTimer);
     stage.classList.remove('probing', 'pop');
     void stage.offsetWidth; // restart the animation
     stage.classList.add('pop');
     play('open');
-    render();
-    window.shiftwheel.revealed();
+    window.shiftwheel.revealed(true);
   }
 
-  function onFileDrag(e) {
-    const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
-    if (!types.includes('Files')) {
-      clearTimeout(probeRevealTimer);
-      window.shiftwheel.revealed(false);
-      return;
-    }
-    if (state.category === null) {
-      const files = [...(e.dataTransfer.items || [])].filter((i) => i.kind === 'file');
-      state.count = files.length || 1;
-      state.category = categoryOf(files.map((i) => i.type));
-      render();
-    }
-    revealWheel();
-    // The whole sector is the hit area, not just the text/highlight
-    setHover(segmentAt(e.clientX, e.clientY));
-  }
-  document.addEventListener('dragenter', onFileDrag);
-  document.addEventListener('dragover', onFileDrag);
-  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) setHover(null); });
-  document.addEventListener('drop', () => {
-    clearTimeout(closeTimer);
-    clearTimeout(probeRevealTimer);
-    if (dropped) return;
-    dropped = true;
-    play(hover && hover !== hole ? 'select' : hover === hole ? 'cancel' : 'close');
-  });
-
-  // Find the segment from the cursor's angle and distance to the center
-  window.shiftwheelHandleDragOver = function(x, y) { revealWheel(); setHover(segmentAt(x, y)); };
+  // Same geometry as the backend (wheel.rs): the whole sector is the hit area
   function segmentAt(x, y) {
     const dist = Math.hypot(x - C, y - C);
     if (dist < r) return hole;
@@ -352,72 +302,59 @@
     if (dist > R + 20 || !list.length) return null;
     const step = 360 / list.length;
     const angle = (Math.atan2(y - C, x - C) * 180 / Math.PI + 90 + step / 2 + 360) % 360;
-    return list[Math.floor(angle / step)] || null;
+    return list[Math.floor(angle / step) % list.length] || null;
   }
 
-  // Native Tauri drag-and-drop events
-  window.shiftwheel.onDragEnter((payload) => {
-    if (!payload) return;
-    if (payload.category) state.category = payload.category;
-    if (payload.count) state.count = payload.count;
-    revealWheel();
+  const hasPoint = (p) => p && typeof p.x === 'number' && typeof p.y === 'number';
+
+  // Native drag-and-drop events from the backend (only sent for file drags)
+  window.shiftwheel.onDragEnter((p) => {
+    if (!p) return;
+    state.category = p.category || 'unknown';
+    state.count = p.count || 1;
+    state.items = Array.isArray(p.items) ? p.items : [];
     render();
-    if (typeof payload.x === 'number' && typeof payload.y === 'number') {
-      setHover(segmentAt(payload.x, payload.y));
-    }
-  });
-
-  window.shiftwheel.onDragOver((payload) => {
-    if (!payload) return;
     revealWheel();
-    if (typeof payload.x === 'number' && typeof payload.y === 'number') {
-      setHover(segmentAt(payload.x, payload.y));
-    }
+    if (hasPoint(p)) setHover(segmentAt(p.x, p.y));
   });
 
-  window.shiftwheel.onDragLeave(() => {
-    setHover(null);
+  window.shiftwheel.onDragOver((p) => {
+    if (!revealed || !hasPoint(p)) return;
+    setHover(segmentAt(p.x, p.y));
   });
 
-  window.shiftwheel.onDragDrop((payload) => {
-    clearTimeout(closeTimer);
-    clearTimeout(probeRevealTimer);
-    dropped = true;
-    if (payload && payload.id) {
-      play('select');
-    } else {
-      play('cancel');
-    }
-  });
+  window.shiftwheel.onDragLeave(() => setHover(null));
 
-  window.shiftwheel.onConfig((config) => { state.config = config; render(); });
+  // The backend plays the select/cancel sound and runs the job
+  window.shiftwheel.onDragDrop(() => setHover(null));
+
   window.shiftwheel.onSettings((s) => { sound.on = Boolean(s && s.sound); });
   window.shiftwheel.onSound(play);
+  window.shiftwheel.getSettings().then((s) => { sound.on = Boolean(s && s.sound); }).catch(() => {});
 
-  // The wheel probes silently on fresh open until dragenter/dragover confirms a file drag
-  window.shiftwheel.onShow(({ mode, fresh }) => {
-    state.mode = mode;
-    dropped = false;
-    clearTimeout(closeTimer);
-    clearTimeout(probeRevealTimer);
+  // A fresh wheel waits invisibly ("probing") until a file drag is confirmed; a drag of text or
+  // anything else never reveals it.
+  window.shiftwheel.onShow((p) => {
+    state.mode = p.mode;
     stage.classList.remove('closing');
-    if (fresh) {
+    if (p.fresh) {
       revealed = false;
       state.category = null;
       state.count = 0;
+      state.items = null;
       stage.classList.remove('pop');
       stage.classList.add('probing');
       render();
-      probeRevealTimer = setTimeout(revealWheel, 80);
       return;
     }
+    // Switching wheels mid-drag keeps the files; the backend sends the new list.
+    if (Array.isArray(p.items)) state.items = p.items;
     if (revealed) play('switch');
     render();
   });
 
   // Mouse released: wheel fades out
   window.shiftwheel.onClose(() => {
-    clearTimeout(probeRevealTimer);
     if (!revealed) return;
     stage.classList.add('closing');
   });

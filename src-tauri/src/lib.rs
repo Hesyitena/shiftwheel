@@ -1,18 +1,25 @@
 mod actions;
 mod config;
 mod converter;
+mod external;
+mod fodt;
 mod hook;
+mod imaging;
+mod jobs;
+mod pdfops;
 mod settings;
 mod tray;
+mod wheel;
 mod window_manager;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use converter::CropRect;
+use jobs::{CropRequest, HudMsg, Job, JobQueue, Ui};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager};
-
-static SOUND_ON: AtomicBool = AtomicBool::new(true);
-static LAST_EXEC_MS: AtomicU64 = AtomicU64::new(0);
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -21,509 +28,360 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-#[derive(Default, Clone)]
-struct DragContext {
+/// The drag the wheel is currently showing.
+#[derive(Default)]
+struct DragState {
     mode: String,
-    category: String,
     paths: Vec<String>,
+    /// True between a file drag entering the wheel and it leaving / dropping. Drops without an
+    /// active file drag are ignored (WebView2 can report a drop for a later non-file drag).
+    active: bool,
+}
+
+struct AppState {
+    drag: Mutex<DragState>,
+    config: config::WheelConfig,
+    jobs: Mutex<Option<JobQueue>>,
+    /// Bumped whenever the overlay is opened or hidden, so a delayed hide never hides a newer wheel.
+    overlay_gen: AtomicU64,
+    /// Same for the progress card.
+    hud_gen: AtomicU64,
+    last_exec_ms: AtomicU64,
+    hud_reveal: Mutex<Option<PathBuf>>,
+    crop_reply: Mutex<Option<Sender<Option<CropRect>>>>,
+    crop_request: Mutex<Option<CropRequest>>,
+}
+
+fn state<R: Runtime>(app: &AppHandle<R>) -> tauri::State<'_, AppState> {
+    app.state::<AppState>()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Job UI backed by the real windows
+// ---------------------------------------------------------------------------------------------
+
+struct TauriUi {
+    app: AppHandle,
+}
+
+impl Ui for TauriUi {
+    fn hud(&self, msg: &HudMsg) {
+        let st = state(&self.app);
+        st.hud_gen.fetch_add(1, Ordering::SeqCst);
+        *st.hud_reveal.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        window_manager::place_and_show_hud(&self.app);
+        let _ = self.app.emit("hud:update", msg);
+    }
+
+    fn finish(&self, msg: &HudMsg, reveal: Option<PathBuf>) {
+        let st = state(&self.app);
+        let generation = st.hud_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        *st.hud_reveal.lock().unwrap_or_else(|e| e.into_inner()) = reveal;
+        window_manager::place_and_show_hud(&self.app);
+        let _ = self.app.emit("hud:update", msg);
+        let app = self.app.clone();
+        let linger = if msg.state == "error" { 6000 } else { 3500 };
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(linger));
+            let st = state(&app);
+            if st.hud_gen.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let _ = app.emit("hud:hide", ());
+            std::thread::sleep(Duration::from_millis(250));
+            if st.hud_gen.load(Ordering::SeqCst) == generation {
+                window_manager::hide_hud(&app);
+            }
+        });
+    }
+
+    fn sound(&self, name: &str) {
+        let _ = self.app.emit("overlay:sound", name);
+    }
+
+    fn ask_crop(&self, req: CropRequest) -> Option<CropRect> {
+        let st = state(&self.app);
+        let (tx, rx) = channel();
+        if let Some(old) = st.crop_reply.lock().unwrap_or_else(|e| e.into_inner()).replace(tx) {
+            let _ = old.send(None);
+        }
+        *st.crop_request.lock().unwrap_or_else(|e| e.into_inner()) = Some(req.clone());
+        window_manager::hide_hud(&self.app);
+        if let Some(win) = self.app.get_webview_window("crop") {
+            let _ = win.emit("crop:init", &req);
+            let _ = win.center();
+            let _ = win.show();
+            let _ = win.unminimize();
+            let _ = win.set_focus();
+        } else {
+            return None;
+        }
+        let answer = rx.recv().unwrap_or(None);
+        *st.crop_request.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        if let Some(win) = self.app.get_webview_window("crop") {
+            let _ = win.hide();
+        }
+        answer
+    }
+}
+
+fn answer_crop<R: Runtime>(app: &AppHandle<R>, rect: Option<CropRect>) {
+    let st = state(app);
+    if let Some(tx) = st.crop_reply.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = tx.send(rect);
+    }
+    if let Some(win) = app.get_webview_window("crop") {
+        let _ = win.hide();
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Commands
+// ---------------------------------------------------------------------------------------------
+
+/// The overlay asks for its settings once it has loaded (an event sent at startup could
+/// arrive before the page is ready).
+#[tauri::command]
+fn get_settings() -> serde_json::Value {
+    serde_json::json!({ "sound": settings::load_settings().sound })
 }
 
 #[tauri::command]
-fn overlay_revealed(app: AppHandle, ok: bool) {
+fn overlay_revealed<R: Runtime>(app: AppHandle<R>, ok: bool) {
     if !ok {
         hook::reset_drag();
+        hook::set_shown(false);
         window_manager::hide_overlay(&app);
     }
 }
 
 #[tauri::command]
-fn crop_done(_rect: serde_json::Value) {
-    // Interactive crop done handler
+fn crop_done<R: Runtime>(app: AppHandle<R>, rect: Option<CropRect>) {
+    answer_crop(&app, rect.filter(|r| r.w > 0.0 && r.h > 0.0));
 }
 
-fn resolve_segment(
-    mode: &str,
-    cat: &str,
-    count: usize,
-    lx: f64,
-    ly: f64,
-    conf: &config::WheelConfig,
-) -> Option<String> {
-    const C: f64 = 180.0;
-    const R_INNER: f64 = 80.0;
-    const R_OUTER: f64 = 166.0;
-
-    let dx = lx - C;
-    let dy = ly - C;
-    let dist = (dx * dx + dy * dy).sqrt();
-
-    if dist < R_INNER || dist > R_OUTER {
-        return None;
-    }
-
-    let list = match mode {
-        "actions" => conf.actions.clone(),
-        "tools" => conf.tools.get(cat).cloned().unwrap_or_default(),
-        _ => conf.convert.get(cat).cloned().unwrap_or_else(|| {
-            conf.convert.get("fallback").cloned().unwrap_or_default()
-        }),
-    };
-
-    let items: Vec<&config::WheelItem> = list
-        .iter()
-        .filter(|item| !item.multi.unwrap_or(false) || count > 1)
-        .collect();
-
-    if items.is_empty() {
-        return None;
-    }
-
-    let step = 360.0 / (items.len() as f64);
-    let mut angle = dy.atan2(dx).to_degrees() + 90.0 + step / 2.0;
-    while angle < 0.0 {
-        angle += 360.0;
-    }
-    angle %= 360.0;
-    let idx = (angle / step).floor() as usize % items.len();
-    Some(items[idx].id.clone())
+#[tauri::command]
+fn get_crop_request<R: Runtime>(app: AppHandle<R>) -> Option<CropRequest> {
+    state(&app).crop_request.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
-fn execute_action(app: AppHandle, id: String, paths: Vec<String>) {
-    if id.is_empty() || paths.is_empty() {
-        return;
-    }
-
-    let parts: Vec<&str> = id.splitn(2, ':').collect();
-    if parts.len() != 2 {
-        return;
-    }
-    let kind = parts[0];
-    let value = parts[1];
-
-    match kind {
-        "convert" => {
-            let total = paths.len();
-            let mut last_out = None;
-            let mut ok_count = 0;
-
-            window_manager::place_and_show_hud(&app);
-
-            for (i, p) in paths.iter().enumerate() {
-                let name = std::path::Path::new(p)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".to_string());
-
-                let _ = app.emit(
-                    "hud:update",
-                    serde_json::json!({
-                        "name": name,
-                        "label": format!("Convert to {}", value.to_uppercase()),
-                        "chip": value.to_uppercase(),
-                        "index": i + 1,
-                        "total": total,
-                        "percent": null,
-                    }),
-                );
-
-                match converter::convert_file(p, value) {
-                    Ok(out) => {
-                        log::info!("Converted {} to {:?}", p, out);
-                        last_out = Some(out);
-                        ok_count += 1;
-                    }
-                    Err(err) => {
-                        log::error!("Conversion failed: {}", err);
-                    }
-                }
-
-                let percent = ((i + 1) as f64) / (total as f64);
-                let _ = app.emit(
-                    "hud:update",
-                    serde_json::json!({
-                        "name": name,
-                        "label": if i + 1 == total { "Done!".to_string() } else { format!("Convert to {}", value.to_uppercase()) },
-                        "chip": value.to_uppercase(),
-                        "index": i + 1,
-                        "total": total,
-                        "percent": percent,
-                    }),
-                );
-            }
-
-            std::thread::sleep(Duration::from_millis(1200));
-            let _ = app.emit("hud:hide", ());
-            std::thread::sleep(Duration::from_millis(250));
-            window_manager::hide_hud(&app);
-
-            if ok_count > 0 {
-                if SOUND_ON.load(Ordering::SeqCst) {
-                    let _ = app.emit("overlay:sound", "done");
-                }
-                if let Some(out) = last_out {
-                    actions::reveal_in_explorer(&out.to_string_lossy());
-                }
-            } else if SOUND_ON.load(Ordering::SeqCst) {
-                let _ = app.emit("overlay:sound", "error");
-            }
+/// Click on the progress card: show the result in Explorer.
+#[tauri::command]
+fn hud_reveal<R: Runtime>(app: AppHandle<R>) {
+    let st = state(&app);
+    let path = st.hud_reveal.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(p) = path {
+        if let Err(e) = actions::reveal_in_explorer(&p.to_string_lossy()) {
+            log::error!("reveal failed: {e}");
         }
-        "tool" => {
-            let total = paths.len();
-            let mut last_out = None;
-            let mut ok_count = 0;
+    }
+    st.hud_gen.fetch_add(1, Ordering::SeqCst);
+    let _ = app.emit("hud:hide", ());
+    window_manager::hide_hud(&app);
+}
 
-            window_manager::place_and_show_hud(&app);
+// ---------------------------------------------------------------------------------------------
+// Overlay events
+// ---------------------------------------------------------------------------------------------
 
-            for (i, p) in paths.iter().enumerate() {
-                let name = std::path::Path::new(p)
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".to_string());
+fn hide_overlay_now<R: Runtime>(app: &AppHandle<R>) {
+    state(app).overlay_gen.fetch_add(1, Ordering::SeqCst);
+    hook::reset_drag();
+    hook::set_shown(false);
+    window_manager::hide_overlay(app);
+}
 
-                let _ = app.emit(
-                    "hud:update",
-                    serde_json::json!({
-                        "name": name,
-                        "label": format!("Tool: {value}"),
-                        "chip": "TOOL",
-                        "index": i + 1,
-                        "total": total,
-                        "percent": null,
-                    }),
-                );
+fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
+    let st = state(app);
+    let to_logical = |p: &tauri::PhysicalPosition<f64>| (p.x / scale, p.y / scale);
+    let to_strings = |paths: &[PathBuf]| -> Vec<String> { paths.iter().map(|p| p.to_string_lossy().to_string()).collect() };
 
-                match converter::run_tool(value, &[p.clone()]) {
-                    Ok(out) => {
-                        last_out = Some(out);
-                        ok_count += 1;
-                    }
-                    Err(err) => {
-                        log::error!("Tool failed: {}", err);
-                    }
-                }
-
-                let percent = ((i + 1) as f64) / (total as f64);
-                let _ = app.emit(
-                    "hud:update",
-                    serde_json::json!({
-                        "name": name,
-                        "label": if i + 1 == total { "Done!".to_string() } else { format!("Tool: {value}") },
-                        "chip": "TOOL",
-                        "index": i + 1,
-                        "total": total,
-                        "percent": percent,
-                    }),
-                );
+    match event {
+        tauri::DragDropEvent::Enter { paths, position } => {
+            if paths.is_empty() {
+                return;
             }
-
-            std::thread::sleep(Duration::from_millis(1200));
-            let _ = app.emit("hud:hide", ());
-            std::thread::sleep(Duration::from_millis(250));
-            window_manager::hide_hud(&app);
-
-            if ok_count > 0 {
-                if SOUND_ON.load(Ordering::SeqCst) {
-                    let _ = app.emit("overlay:sound", "done");
-                }
-                if let Some(out) = last_out {
-                    actions::reveal_in_explorer(&out.to_string_lossy());
-                }
-            } else if SOUND_ON.load(Ordering::SeqCst) {
-                let _ = app.emit("overlay:sound", "error");
-            }
-        }
-        "action" => {
-            let name = paths
-                .first()
-                .and_then(|p| std::path::Path::new(p).file_name())
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Selection".to_string());
-
-            window_manager::place_and_show_hud(&app);
-
-            let label = match value {
-                "copy-path" => "Copy path",
-                "copy" => "Copy to clipboard",
-                "copy-to" => "Copy to folder",
-                "move-to" => "Move to folder",
-                "terminal" => "Open Terminal",
-                "reveal" => "Reveal in Explorer",
-                _ => "Action",
+            let (lx, ly) = to_logical(position);
+            let paths = to_strings(paths);
+            let items = {
+                let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
+                d.active = true;
+                d.paths = paths.clone();
+                wheel::items_for(&st.config, &d.mode, &paths)
             };
-
             let _ = app.emit(
-                "hud:update",
+                "overlay:drag_enter",
                 serde_json::json!({
-                    "name": name,
-                    "label": format!("{label}..."),
-                    "chip": "ACTION",
-                    "index": 1,
-                    "total": 1,
-                    "percent": null,
+                    "category": wheel::category_for(&paths),
+                    "count": paths.len(),
+                    "items": items,
+                    "x": lx,
+                    "y": ly,
                 }),
             );
-
-            match value {
-                "copy-path" => {
-                    let _ = actions::copy_text_to_clipboard(&paths.join("\r\n"));
-                }
-                "copy" => {
-                    let _ = actions::copy_files_to_clipboard(&paths);
-                }
-                "copy-to" => {
-                    let _ = actions::transfer_files(&paths, false);
-                }
-                "move-to" => {
-                    let _ = actions::transfer_files(&paths, true);
-                }
-                "terminal" => {
-                    actions::open_terminal(&paths);
-                }
-                "reveal" => {
-                    if let Some(first) = paths.first() {
-                        actions::reveal_in_explorer(first);
-                    }
-                }
-                _ => {}
+        }
+        tauri::DragDropEvent::Over { position } => {
+            if !st.drag.lock().unwrap_or_else(|e| e.into_inner()).active {
+                return;
             }
+            let (lx, ly) = to_logical(position);
+            let _ = app.emit("overlay:drag_over", serde_json::json!({ "x": lx, "y": ly }));
+        }
+        tauri::DragDropEvent::Leave => {
+            st.drag.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+            let _ = app.emit("overlay:drag_leave", ());
+        }
+        tauri::DragDropEvent::Drop { paths, position } => {
+            let (lx, ly) = to_logical(position);
+            let paths = to_strings(paths);
+            let (was_active, mode) = {
+                let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
+                let was = d.active;
+                d.active = false;
+                d.paths.clear();
+                (was, d.mode.clone())
+            };
+            hide_overlay_now(app);
 
-            let _ = app.emit(
-                "hud:update",
-                serde_json::json!({
-                    "name": name,
-                    "label": format!("{label} · Done!"),
-                    "chip": "ACTION",
-                    "index": 1,
-                    "total": 1,
-                    "percent": 1.0,
-                }),
-            );
+            if !was_active || paths.is_empty() {
+                let _ = app.emit("overlay:drag_drop", serde_json::json!({ "id": null }));
+                return;
+            }
+            let items = wheel::items_for(&st.config, &mode, &paths);
+            let id = wheel::resolve(&items, lx, ly);
+            log::info!("drop at ({lx:.1}, {ly:.1}) -> {id:?}");
+            let sound = match (&id, wheel::zone(lx, ly)) {
+                (Some(_), _) => "select",
+                (None, wheel::Zone::Hole) => "cancel",
+                _ => "close",
+            };
+            let _ = app.emit("overlay:sound", sound);
+            let _ = app.emit("overlay:drag_drop", serde_json::json!({ "id": id }));
 
-            std::thread::sleep(Duration::from_millis(1200));
-            let _ = app.emit("hud:hide", ());
-            std::thread::sleep(Duration::from_millis(250));
-            window_manager::hide_hud(&app);
+            if let Some(id) = id {
+                // One OLE drop can be reported twice; ignore repeats.
+                let now = now_ms();
+                if now.saturating_sub(st.last_exec_ms.swap(now, Ordering::SeqCst)) < 400 {
+                    return;
+                }
+                if let Some(q) = st.jobs.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                    q.push(Job { id, paths });
+                }
+            }
         }
         _ => {}
     }
 }
 
-#[tauri::command]
-fn overlay_drop(app: AppHandle, msg: serde_json::Value) {
-    hook::reset_drag();
-    window_manager::hide_overlay(&app);
-
-    let id = msg.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let paths: Vec<String> = msg
-        .get("paths")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if id.is_empty() || paths.is_empty() {
-        return;
+fn on_hook_event(app: &AppHandle, event: hook::HookEvent) {
+    let st = state(app);
+    match event {
+        hook::HookEvent::OpenWheel { mode, x, y, fresh } => {
+            if fresh {
+                {
+                    let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
+                    d.mode = mode.clone();
+                    d.active = false;
+                    d.paths.clear();
+                }
+                st.overlay_gen.fetch_add(1, Ordering::SeqCst);
+                window_manager::place_and_show_overlay(app, x, y);
+                let _ = app.emit("overlay:show", serde_json::json!({ "mode": mode, "fresh": true }));
+            } else {
+                // Switching wheels mid-drag: keep the window where it is and the files we know about.
+                let items = {
+                    let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
+                    d.mode = mode.clone();
+                    d.active.then(|| wheel::items_for(&st.config, &mode, &d.paths))
+                };
+                let _ = app.emit(
+                    "overlay:show",
+                    serde_json::json!({ "mode": mode, "fresh": false, "items": items }),
+                );
+            }
+        }
+        hook::HookEvent::ScheduleHide => {
+            let _ = app.emit("overlay:close", ());
+            let generation = st.overlay_gen.load(Ordering::SeqCst);
+            let h = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(350));
+                if state(&h).overlay_gen.load(Ordering::SeqCst) == generation {
+                    window_manager::hide_overlay(&h);
+                }
+            });
+        }
+        hook::HookEvent::HideNow => {
+            let _ = app.emit("overlay:close", ());
+            st.overlay_gen.fetch_add(1, Ordering::SeqCst);
+            window_manager::hide_overlay(app);
+        }
     }
+}
 
-    let now = now_ms();
-    let last = LAST_EXEC_MS.swap(now, Ordering::SeqCst);
-    if now.saturating_sub(last) < 400 {
-        return;
+fn new_state() -> AppState {
+    AppState {
+        drag: Mutex::new(DragState { mode: "convert".into(), ..Default::default() }),
+        config: config::get_wheel_config(),
+        jobs: Mutex::new(None),
+        overlay_gen: AtomicU64::new(0),
+        hud_gen: AtomicU64::new(0),
+        last_exec_ms: AtomicU64::new(0),
+        hud_reveal: Mutex::new(None),
+        crop_reply: Mutex::new(None),
+        crop_request: Mutex::new(None),
     }
+}
 
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        execute_action(app_clone, id, paths);
-    });
+/// The commands bridge.js can call.
+fn commands<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    tauri::generate_handler![get_settings, overlay_revealed, crop_done, get_crop_request, hud_reveal]
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(new_state())
         .setup(|app| {
             if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+                app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
             }
-
+            let handle = app.handle().clone();
             let s = settings::load_settings();
-            SOUND_ON.store(s.sound, Ordering::SeqCst);
+            tray::create_tray(&handle)?;
 
-            let _tray = tray::create_tray(&app.handle())?;
+            *state(&handle).jobs.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(JobQueue::start(Arc::new(TauriUi { app: handle.clone() })));
 
-            let drag_ctx = Arc::new(Mutex::new(DragContext {
-                mode: "convert".to_string(),
-                category: "fallback".to_string(),
-                paths: Vec::new(),
-            }));
-            let drag_ctx_hook = drag_ctx.clone();
-            let drag_ctx_win = drag_ctx.clone();
-
-            if let Some(overlay_win) = app.get_webview_window("overlay") {
-                let app_h = app.handle().clone();
-                let conf = config::get_wheel_config();
-                let overlay_for_closure = overlay_win.clone();
-
-                overlay_win.on_window_event(move |event| {
+            if let Some(overlay) = app.get_webview_window("overlay") {
+                let h = handle.clone();
+                let win = overlay.clone();
+                overlay.on_window_event(move |event| {
                     if let tauri::WindowEvent::DragDrop(dde) = event {
-                        match dde {
-                            tauri::DragDropEvent::Enter { paths, position } => {
-                                let mut cat = "fallback".to_string();
-                                let count = paths.len();
-                                if let Some(first) = paths.first() {
-                                    cat = converter::category_of(first.to_str().unwrap_or("")).to_string();
-                                }
-                                let scale = overlay_for_closure.scale_factor().unwrap_or(1.0);
-                                let lx = position.x as f64 / scale;
-                                let ly = position.y as f64 / scale;
-
-                                let paths_str: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
-                                if let Ok(mut ctx) = drag_ctx_win.lock() {
-                                    ctx.paths = paths_str.clone();
-                                    ctx.category = cat.clone();
-                                }
-
-                                let _ = app_h.emit(
-                                    "overlay:drag_enter",
-                                    serde_json::json!({
-                                        "category": cat,
-                                        "count": count,
-                                        "paths": paths_str,
-                                        "x": lx,
-                                        "y": ly,
-                                    }),
-                                );
-                            }
-                            tauri::DragDropEvent::Over { position } => {
-                                let scale = overlay_for_closure.scale_factor().unwrap_or(1.0);
-                                let lx = position.x as f64 / scale;
-                                let ly = position.y as f64 / scale;
-                                let _ = app_h.emit(
-                                    "overlay:drag_over",
-                                    serde_json::json!({ "x": lx, "y": ly }),
-                                );
-                            }
-                            tauri::DragDropEvent::Drop { paths, position } => {
-                                let scale = overlay_for_closure.scale_factor().unwrap_or(1.0);
-                                let lx = position.x as f64 / scale;
-                                let ly = position.y as f64 / scale;
-
-                                let (mode, cat, all_paths) = {
-                                    let mut ctx = drag_ctx_win.lock().unwrap();
-                                    if !paths.is_empty() {
-                                        ctx.paths = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
-                                        if let Some(first) = paths.first() {
-                                            ctx.category = converter::category_of(first.to_str().unwrap_or("")).to_string();
-                                        }
-                                    }
-                                    (ctx.mode.clone(), ctx.category.clone(), ctx.paths.clone())
-                                };
-
-                                let selected_id = resolve_segment(&mode, &cat, all_paths.len(), lx, ly, &conf);
-                                log::info!("Drop event: selected_id={:?}, pos=({:.1}, {:.1})", selected_id, lx, ly);
-
-                                hook::reset_drag();
-                                window_manager::hide_overlay(&app_h);
-
-                                let _ = app_h.emit(
-                                    "overlay:drag_drop",
-                                    serde_json::json!({
-                                        "id": selected_id,
-                                        "paths": all_paths,
-                                        "x": lx,
-                                        "y": ly,
-                                    }),
-                                );
-
-                                if let Some(id) = selected_id {
-                                    let now = now_ms();
-                                    let last = LAST_EXEC_MS.swap(now, Ordering::SeqCst);
-                                    if now.saturating_sub(last) >= 400 {
-                                        if SOUND_ON.load(Ordering::SeqCst) {
-                                            let _ = app_h.emit("overlay:sound", "select");
-                                        }
-                                        let h = app_h.clone();
-                                        std::thread::spawn(move || {
-                                            execute_action(h, id, all_paths);
-                                        });
-                                    }
-                                } else {
-                                    let dx = lx - 180.0;
-                                    let dy = ly - 180.0;
-                                    let dist = (dx * dx + dy * dy).sqrt();
-                                    if dist < 80.0 && SOUND_ON.load(Ordering::SeqCst) {
-                                        let _ = app_h.emit("overlay:sound", "cancel");
-                                    } else if SOUND_ON.load(Ordering::SeqCst) {
-                                        let _ = app_h.emit("overlay:sound", "close");
-                                    }
-                                }
-                            }
-                            tauri::DragDropEvent::Leave => {
-                                let _ = app_h.emit("overlay:drag_leave", ());
-                            }
-                            _ => {}
-                        }
+                        on_drag_drop(&h, win.scale_factor().unwrap_or(1.0), dde);
                     }
                 });
             }
 
-            let app_handle = app.handle().clone();
-
-            // Send config to overlay once ready
-            let conf = config::get_wheel_config();
-            let app_clone_init = app.handle().clone();
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(600));
-                let _ = app_clone_init.emit("overlay:config", conf);
-                let _ = app_clone_init.emit("overlay:settings", serde_json::json!({ "sound": s.sound }));
-            });
-
-            // Start native low-level Windows hook
-            hook::start_hook(move |event| {
-                let handle = app_handle.clone();
-                match event {
-                    hook::HookEvent::OpenWheel { mode, x, y } => {
-                        if let Ok(mut ctx) = drag_ctx_hook.lock() {
-                            ctx.mode = mode.clone();
-                        }
-                        window_manager::place_and_show_overlay(&handle, x, y);
-                        hook::set_shown(true);
-                        let _ = handle.emit(
-                            "overlay:show",
-                            serde_json::json!({ "mode": mode, "fresh": true }),
-                        );
+            if let Some(crop) = app.get_webview_window("crop") {
+                let h = handle.clone();
+                crop.on_window_event(move |event| {
+                    // The title-bar close button cancels the crop instead of destroying the window.
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        answer_crop(&h, None);
                     }
-                    hook::HookEvent::ScheduleHide => {
-                        hook::set_shown(false);
-                        let _ = handle.emit("overlay:close", ());
-                        let h = handle.clone();
-                        std::thread::spawn(move || {
-                            std::thread::sleep(Duration::from_millis(350));
-                            window_manager::hide_overlay(&h);
-                        });
-                    }
-                    hook::HookEvent::HideNow => {
-                        hook::set_shown(false);
-                        let _ = handle.emit("overlay:close", ());
-                        window_manager::hide_overlay(&handle);
-                    }
-                    hook::HookEvent::ProbeCheck => {}
-                }
-            });
+                });
+            }
 
+            let h = handle.clone();
+            hook::start_hook(s.enabled, move |event| on_hook_event(&h, event));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            overlay_revealed,
-            overlay_drop,
-            crop_done,
-        ])
+        .invoke_handler(commands())
         .run(tauri::generate_context!())
         .expect("error while building tauri application");
 }
+
+#[cfg(test)]
+mod e2e;

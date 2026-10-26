@@ -9,7 +9,10 @@
     "start": "tauri dev",
     "dev": "tauri dev",
     "build": "tauri build",
-    "dist": "tauri build --bundles nsis"
+    "dist": "tauri build --bundles nsis",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml && node tests/ui-e2e.mjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "test:ui": "node tests/ui-e2e.mjs"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.4"

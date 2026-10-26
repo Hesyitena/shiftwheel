@@ -8,20 +8,24 @@
   };
 
   window.shiftwheel = {
-    onConfig: on('overlay:config'),
+    // overlay
+    getSettings: () => invoke('get_settings'),
     onSettings: on('overlay:settings'),
     onShow: on('overlay:show'),
     onClose: on('overlay:close'),
     onSound: on('overlay:sound'),
     revealed: (ok = true) => invoke('overlay_revealed', { ok: Boolean(ok) }),
-    onHud: on('hud:update'),
-    onHudHide: on('hud:hide'),
-    onCropInit: on('crop:init'),
-    cropDone: (rect) => invoke('crop_done', { rect }),
     onDragEnter: on('overlay:drag_enter'),
     onDragOver: on('overlay:drag_over'),
     onDragDrop: on('overlay:drag_drop'),
     onDragLeave: on('overlay:drag_leave'),
-    drop: (id, paths) => invoke('overlay_drop', { msg: { id, paths } }),
+    // progress card
+    onHud: on('hud:update'),
+    onHudHide: on('hud:hide'),
+    hudReveal: () => invoke('hud_reveal'),
+    // crop editor
+    getCropRequest: () => invoke('get_crop_request'),
+    onCropInit: on('crop:init'),
+    cropDone: (rect) => invoke('crop_done', { rect }),
   };
 })();

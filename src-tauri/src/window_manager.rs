@@ -1,83 +1,165 @@
-use tauri::{AppHandle, Manager};
-use windows_sys::Win32::Foundation::{POINT, RECT};
-use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
-};
+//! Placing the overlay and HUD windows.
+//!
+//! All math is in physical pixels using the DPI of the monitor the window is going to, so the
+//! wheel stays centered on the cursor at 125 % / 150 % scaling and on mixed-DPI setups.
 
-pub const OVERLAY_W: i32 = 360;
-pub const OVERLAY_H: i32 = 380;
-pub const WHEEL_CENTER: i32 = 180;
+use tauri::{AppHandle, Manager, Runtime};
 
-pub const HUD_W: i32 = 340;
-pub const HUD_H: i32 = 92;
+pub const OVERLAY_W: f64 = 360.0;
+pub const OVERLAY_H: f64 = 380.0;
+pub const WHEEL_CENTER: f64 = 180.0;
+pub const HUD_W: f64 = 340.0;
+pub const HUD_H: f64 = 92.0;
+/// HUD distance from the work-area corner (logical px). The card already has 12-14 px of
+/// transparent padding for its shadow.
+const HUD_MARGIN: f64 = 4.0;
 
-pub fn get_work_area_for_point(pt: POINT) -> RECT {
+/// A monitor work area (excludes the taskbar) in physical pixels, plus its scale factor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkArea {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+    pub scale: f64,
+}
+
+/// Top-left (physical) for a window of logical size `w`×`h` whose logical point (`ax`, `ay`)
+/// should sit on (`x`, `y`), kept inside the work area.
+pub fn anchored_position(wa: WorkArea, x: i32, y: i32, w: f64, h: f64, ax: f64, ay: f64) -> (i32, i32) {
+    let (pw, ph) = ((w * wa.scale).round() as i32, (h * wa.scale).round() as i32);
+    let tx = x - (ax * wa.scale).round() as i32;
+    let ty = y - (ay * wa.scale).round() as i32;
+    let clamp = |v: i32, lo: i32, hi: i32| if hi < lo { lo } else { v.clamp(lo, hi) };
+    (clamp(tx, wa.left, wa.right - pw), clamp(ty, wa.top, wa.bottom - ph))
+}
+
+/// Bottom-right corner position (physical) for the HUD.
+pub fn hud_position(wa: WorkArea) -> (i32, i32) {
+    let m = (HUD_MARGIN * wa.scale).round() as i32;
+    (
+        wa.right - (HUD_W * wa.scale).round() as i32 - m,
+        wa.bottom - (HUD_H * wa.scale).round() as i32 - m,
+    )
+}
+
+#[cfg(windows)]
+pub fn work_area_at(x: i32, y: i32) -> WorkArea {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint};
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
     unsafe {
-        let h_mon: HMONITOR = MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST);
+        let mon = MonitorFromPoint(POINT { x, y }, MONITOR_DEFAULTTONEAREST);
         let mut mi: MONITORINFO = std::mem::zeroed();
         mi.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-        if GetMonitorInfoW(h_mon, &mut mi) != 0 {
-            mi.rcWork
+        let (mut dx, mut dy) = (96u32, 96u32);
+        let scale = if GetDpiForMonitor(mon, MDT_EFFECTIVE_DPI, &mut dx, &mut dy) == 0 { dx as f64 / 96.0 } else { 1.0 };
+        if GetMonitorInfoW(mon, &mut mi) != 0 {
+            let r = mi.rcWork;
+            WorkArea { left: r.left, top: r.top, right: r.right, bottom: r.bottom, scale }
         } else {
-            RECT {
-                left: 0,
-                top: 0,
-                right: 1920,
-                bottom: 1080,
-            }
+            WorkArea { left: 0, top: 0, right: 1920, bottom: 1080, scale }
         }
     }
 }
 
-pub fn place_and_show_overlay(app: &AppHandle, x: i32, y: i32) {
+#[cfg(windows)]
+fn cursor() -> (i32, i32) {
+    use windows_sys::Win32::Foundation::POINT;
+    let mut pt = POINT { x: 0, y: 0 };
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt) };
+    (pt.x, pt.y)
+}
+
+/// Non-Windows builds (development only): use Tauri's monitor info.
+#[cfg(not(windows))]
+pub fn work_area_at(_x: i32, _y: i32) -> WorkArea {
+    WorkArea { left: 0, top: 0, right: 1920, bottom: 1080, scale: 1.0 }
+}
+
+#[cfg(not(windows))]
+fn cursor() -> (i32, i32) {
+    (0, 0)
+}
+
+fn set_physical<R: Runtime>(win: &tauri::WebviewWindow<R>, (x, y): (i32, i32)) {
+    let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+}
+
+pub fn place_and_show_overlay<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) {
     if let Some(overlay) = app.get_webview_window("overlay") {
-        let scale = overlay.scale_factor().unwrap_or(1.0);
-        let pt = POINT { x, y };
-        let wa = get_work_area_for_point(pt);
-
-        let target_x = (x - WHEEL_CENTER).clamp(wa.left, wa.right - OVERLAY_W);
-        let target_y = (y - WHEEL_CENTER).clamp(wa.top, wa.bottom - OVERLAY_H);
-
-        let logical_x = target_x as f64 / scale;
-        let logical_y = target_y as f64 / scale;
-
-        let _ = overlay.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-            x: logical_x,
-            y: logical_y,
-        }));
-        let _ = overlay.set_always_on_top(true);
+        let wa = work_area_at(x, y);
+        let pos = anchored_position(wa, x, y, OVERLAY_W, OVERLAY_H, WHEEL_CENTER, WHEEL_CENTER);
+        set_physical(&overlay, pos);
         let _ = overlay.show();
+        // Moving to a monitor with another DPI resizes the window after the move; place it again.
+        set_physical(&overlay, pos);
     }
 }
 
-pub fn hide_overlay(app: &AppHandle) {
+pub fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
     if let Some(overlay) = app.get_webview_window("overlay") {
         let _ = overlay.hide();
     }
 }
 
-pub fn place_and_show_hud(app: &AppHandle) {
+pub fn place_and_show_hud<R: Runtime>(app: &AppHandle<R>) {
     if let Some(hud) = app.get_webview_window("hud") {
-        if let Ok(Some(mon)) = hud.current_monitor() {
-            let mon_size = mon.size();
-            let scale = mon.scale_factor();
-            let logical_w = mon_size.width as f64 / scale;
-            let logical_h = mon_size.height as f64 / scale;
-            let target_x = logical_w - (HUD_W as f64) - 16.0;
-            let target_y = logical_h - (HUD_H as f64) - 16.0;
-
-            let _ = hud.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                x: target_x,
-                y: target_y,
-            }));
-        }
-        let _ = hud.set_always_on_top(true);
+        let (x, y) = cursor();
+        let pos = hud_position(work_area_at(x, y));
+        set_physical(&hud, pos);
         let _ = hud.show();
+        set_physical(&hud, pos);
     }
 }
 
-pub fn hide_hud(app: &AppHandle) {
+pub fn hide_hud<R: Runtime>(app: &AppHandle<R>) {
     if let Some(hud) = app.get_webview_window("hud") {
         let _ = hud.hide();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wheel_centers_on_cursor_at_150_percent() {
+        let wa = WorkArea { left: 0, top: 0, right: 2880, bottom: 1800, scale: 1.5 };
+        let (x, y) = anchored_position(wa, 1000, 900, OVERLAY_W, OVERLAY_H, WHEEL_CENTER, WHEEL_CENTER);
+        // window top-left + 180 logical px * 1.5 = cursor
+        assert_eq!((x + 270, y + 270), (1000, 900));
+    }
+
+    #[test]
+    fn wheel_stays_on_screen_at_edges() {
+        let wa = WorkArea { left: 0, top: 0, right: 2880, bottom: 1752, scale: 1.5 };
+        let (x, y) = anchored_position(wa, 2870, 1750, OVERLAY_W, OVERLAY_H, WHEEL_CENTER, WHEEL_CENTER);
+        assert_eq!(x + 540, 2880);
+        assert_eq!(y + 570, 1752);
+    }
+
+    #[test]
+    fn secondary_monitor_left_of_primary() {
+        let wa = WorkArea { left: -1920, top: 0, right: 0, bottom: 1040, scale: 1.0 };
+        let (x, y) = anchored_position(wa, -1000, 500, OVERLAY_W, OVERLAY_H, WHEEL_CENTER, WHEEL_CENTER);
+        assert_eq!((x, y), (-1180, 320));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn real_work_area_is_sane() {
+        let wa = work_area_at(10, 10);
+        assert!(wa.right > wa.left && wa.bottom > wa.top, "{wa:?}");
+        assert!(wa.scale >= 1.0 && wa.scale <= 4.0, "{wa:?}");
+    }
+
+    #[test]
+    fn hud_sits_above_taskbar() {
+        // 1080p at 125 % with a 60 px taskbar: work area bottom 1020.
+        let wa = WorkArea { left: 0, top: 0, right: 1920, bottom: 1020, scale: 1.25 };
+        let (x, y) = hud_position(wa);
+        assert_eq!(x + 425 + 5, 1920);
+        assert_eq!(y + 115 + 5, 1020);
     }
 }
