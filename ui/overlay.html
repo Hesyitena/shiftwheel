@@ -46,7 +46,8 @@
   #title { font-size: 15px; font-weight: 600; letter-spacing: -.1px; line-height: 1.25; }
   #desc { margin-top: 3px; font-size: 11px; line-height: 1.35; color: var(--sub); }
   #center.idle #title { font-size: 12px; font-weight: 500; color: var(--sub); }
-  #center.cancel #title { color: var(--danger); }
+  #center.cancel #title { color: var(--danger); font-size: 15px; font-weight: 600; }
+  #center.cancel #desc { color: var(--danger); opacity: .85; }
 
   #modes {
     position: absolute; top: 342px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
@@ -230,10 +231,23 @@
   function paintCenter() {
     let t = '', d = '';
     const empty = emptyText();
-    if (hover === hole) { t = 'Cancel'; d = 'Drop here'; }
-    else if (hover) { t = hover.dataset.label; d = hover.dataset.caption; }
-    else if (empty) t = empty;
-    else if (state.category) { const n = state.count || 1; t = `${n} ${kind(n)}`; }
+    if (hover === hole) {
+      t = 'Cancel';
+      d = 'Drop here';
+    } else if (hover) {
+      t = hover.dataset.label;
+      d = hover.dataset.caption;
+    } else if (empty) {
+      t = empty;
+      d = '';
+    } else if (state.category) {
+      const n = state.count || 1;
+      t = `${n} ${kind(n)}`;
+      d = '';
+    } else {
+      t = 'Shiftwheel';
+      d = 'Drop on a slice';
+    }
     center.classList.toggle('idle', !hover);
     center.classList.toggle('cancel', hover === hole);
     title.textContent = t;
@@ -319,8 +333,8 @@
   });
 
   window.shiftwheel.onDragOver((p) => {
-    if (!revealed || !hasPoint(p)) return;
-    setHover(segmentAt(p.x, p.y));
+    if (!revealed) revealWheel();
+    if (hasPoint(p)) setHover(segmentAt(p.x, p.y));
   });
 
   window.shiftwheel.onDragLeave(() => setHover(null));
@@ -332,25 +346,36 @@
   window.shiftwheel.onSound(play);
   window.shiftwheel.getSettings().then((s) => { sound.on = Boolean(s && s.sound); }).catch(() => {});
 
-  // A fresh wheel waits invisibly ("probing") until a file drag is confirmed; a drag of text or
-  // anything else never reveals it.
   window.shiftwheel.onShow((p) => {
     state.mode = p.mode;
     stage.classList.remove('closing');
+    if (Array.isArray(p.items) && p.items.length) {
+      state.items = p.items;
+    }
     if (p.fresh) {
       revealed = false;
       state.category = null;
       state.count = 0;
-      state.items = null;
-      stage.classList.remove('pop');
-      stage.classList.add('probing');
       render();
+      revealWheel();
       return;
     }
     // Switching wheels mid-drag keeps the files; the backend sends the new list.
-    if (Array.isArray(p.items)) state.items = p.items;
     if (revealed) play('switch');
     render();
+  });
+
+  document.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    if (!revealed) revealWheel();
+    setHover(segmentAt(e.clientX, e.clientY));
+  });
+  document.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget) setHover(null);
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!revealed) return;
+    setHover(segmentAt(e.clientX, e.clientY));
   });
 
   // Mouse released: wheel fades out

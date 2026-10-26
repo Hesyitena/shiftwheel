@@ -86,7 +86,7 @@ fn set_physical<R: Runtime>(win: &tauri::WebviewWindow<R>, (x, y): (i32, i32)) {
     let _ = win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
 }
 
-pub fn place_and_show_overlay<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) {
+pub fn place_and_show_overlay<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) -> (i32, i32) {
     if let Some(overlay) = app.get_webview_window("overlay") {
         let wa = work_area_at(x, y);
         let pos = anchored_position(wa, x, y, OVERLAY_W, OVERLAY_H, WHEEL_CENTER, WHEEL_CENTER);
@@ -94,6 +94,9 @@ pub fn place_and_show_overlay<R: Runtime>(app: &AppHandle<R>, x: i32, y: i32) {
         let _ = overlay.show();
         // Moving to a monitor with another DPI resizes the window after the move; place it again.
         set_physical(&overlay, pos);
+        pos
+    } else {
+        (x - WHEEL_CENTER as i32, y - WHEEL_CENTER as i32)
     }
 }
 

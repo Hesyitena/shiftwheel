@@ -54,9 +54,13 @@ pub fn items_for(conf: &WheelConfig, mode: &str, paths: &[String]) -> Vec<WheelI
     let count = paths.len();
     let list: Vec<WheelItem> = match mode {
         "actions" => conf.actions.clone(),
-        "tools" => conf.tools.get(category).cloned().unwrap_or_default(),
-        _ if category == "folder" => Vec::new(),
-        _ => conf.convert.get(category).cloned().unwrap_or_default(),
+        "tools" => conf.tools.get(category).cloned().unwrap_or_else(|| {
+            conf.tools.get("image").cloned().unwrap_or_default()
+        }),
+        _ if !paths.is_empty() && category == "folder" => Vec::new(),
+        _ => conf.convert.get(category).cloned().unwrap_or_else(|| {
+            conf.convert.get("image").cloned().unwrap_or_default()
+        }),
     };
     let same = common_ext(paths).map(|e| format!("convert:{e}"));
     list.into_iter()

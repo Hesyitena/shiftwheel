@@ -18,6 +18,9 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, Box<dyn std::error::Erro
         .checked(autostart)
         .build(app)?;
     let sep = PredefinedMenuItem::separator(app)?;
+    let hint_item = MenuItemBuilder::with_id("hint", "Cara pakai: Drag file lalu tekan Shift / Ctrl / Alt")
+        .enabled(false)
+        .build(app)?;
     let info_item = MenuItemBuilder::with_id("info", concat!("Shiftwheel v", env!("CARGO_PKG_VERSION")))
         .enabled(false)
         .build(app)?;
@@ -29,6 +32,7 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, Box<dyn std::error::Erro
             &sounds_item,
             &autostart_item,
             &sep,
+            &hint_item,
             &info_item,
             &quit_item,
         ])
@@ -40,7 +44,7 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, Box<dyn std::error::Erro
 
     let tray = TrayIconBuilder::new()
         .icon(tauri::image::Image::from_bytes(include_bytes!("../../assets/tray-32.png"))?)
-        .tooltip("Shiftwheel")
+        .tooltip("Shiftwheel (Drag file + tap Shift/Ctrl/Alt)")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(move |app_handle, event| {

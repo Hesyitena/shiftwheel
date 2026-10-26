@@ -48,58 +48,8 @@ windows-sys = { version = "0.61", features = [
 debug = 0
 
 [profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
+opt-level = 2
+lto = false
+codegen-units = 16
 panic = "abort"
 strip = true
-
-# Image decoding/encoding is CPU-bound: optimize those crates for speed, the rest for size.
-# (Not the app crate itself: that pulls Tauri's generic code to opt-level 3 and nearly doubles the exe.)
-[profile.release.package.imgcore]
-opt-level = 3
-
-[profile.release.package.image]
-opt-level = 3
-
-[profile.release.package.png]
-opt-level = 3
-
-[profile.release.package.fdeflate]
-opt-level = 3
-
-[profile.release.package.flate2]
-opt-level = 3
-
-[profile.release.package.miniz_oxide]
-opt-level = 3
-
-[profile.release.package."zune-jpeg"]
-opt-level = 3
-
-[profile.release.package."zune-core"]
-opt-level = 3
-
-[profile.release.package."image-webp"]
-opt-level = 3
-
-[profile.release.package.gif]
-opt-level = 3
-
-[profile.release.package.tiff]
-opt-level = 3
-
-[profile.release.package.weezl]
-opt-level = 3
-
-[profile.release.package.color_quant]
-opt-level = 3
-
-[profile.release.package."simd-adler32"]
-opt-level = 3
-
-[profile.release.package.crc32fast]
-opt-level = 3
-
-[profile.release.package.adler2]
-opt-level = 3

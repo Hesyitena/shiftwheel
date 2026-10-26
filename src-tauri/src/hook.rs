@@ -7,8 +7,6 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const DRAG_THRESHOLD: i32 = 4;
-/// Key auto-repeat arrives faster than this; a real second tap comes after a key-up anyway.
-const REPEAT_GAP: Duration = Duration::from_millis(600);
 /// "Tap the key, then start dragging" window.
 const PRE_TAP_WINDOW: Duration = Duration::from_millis(450);
 
@@ -17,6 +15,8 @@ pub enum HookEvent {
     /// Show the wheel. `fresh` is false when switching mode on a wheel that is already open
     /// (then the window must stay where it is).
     OpenWheel { mode: String, x: i32, y: i32, fresh: bool },
+    /// Track mouse cursor position while wheel is visible so slices can highlight and cancel text appears
+    CursorMove { x: i32, y: i32 },
     /// Mouse released: fade out, then hide.
     ScheduleHide,
     /// Hide at once (click elsewhere).
@@ -64,6 +64,8 @@ pub struct Machine {
     pending_mode: Option<Mode>,
     pre_tap: Option<(Mode, Instant)>,
     last_key_down: [Option<Instant>; 3],
+    last_tap: [Option<Instant>; 3],
+    key_held: [bool; 3],
 }
 
 impl Machine {
@@ -76,6 +78,7 @@ impl Machine {
         self.moved = false;
         self.pending_mode = None;
         self.pre_tap = None;
+        self.key_held = [false; 3];
     }
 
     fn open(&mut self, mode: Mode, cursor: (i32, i32)) -> HookEvent {
@@ -104,6 +107,9 @@ impl Machine {
                 None
             }
             Input::MouseMove { x, y } => {
+                if self.shown {
+                    return Some(HookEvent::CursorMove { x, y });
+                }
                 if self.down && !self.moved {
                     let (dx, dy) = ((x - self.x0) as i64, (y - self.y0) as i64);
                     if dx * dx + dy * dy >= (DRAG_THRESHOLD * DRAG_THRESHOLD) as i64 {
@@ -134,10 +140,12 @@ impl Machine {
                 None
             }
             Input::KeyDown(mode) => {
-                let last = &mut self.last_key_down[mode.index()];
-                if last.is_some_and(|t| now.duration_since(t) < REPEAT_GAP) {
-                    return None; // auto-repeat while held
+                // If key is already held down, ignore all auto-repeat events completely!
+                if self.key_held[mode.index()] {
+                    return None;
                 }
+                self.key_held[mode.index()] = true;
+                let last = &mut self.last_key_down[mode.index()];
                 *last = Some(now);
                 if self.down {
                     self.pre_tap = None;
@@ -146,11 +154,21 @@ impl Machine {
                     }
                     self.pending_mode = Some(mode);
                 } else {
+                    // Double-tap shortcut to open/preview wheel without dragging
+                    if let Some(t) = self.last_tap[mode.index()] {
+                        if now.duration_since(t) < Duration::from_millis(400) {
+                            self.last_tap[mode.index()] = None;
+                            self.pre_tap = None;
+                            return Some(self.open(mode, cursor));
+                        }
+                    }
+                    self.last_tap[mode.index()] = Some(now);
                     self.pre_tap = Some((mode, now));
                 }
                 None
             }
             Input::KeyUp(mode) => {
+                self.key_held[mode.index()] = false;
                 self.last_key_down[mode.index()] = None;
                 if self.down && !self.shown {
                     if let Some((pre_mode, at)) = self.pre_tap {
@@ -397,6 +415,17 @@ mod tests {
         assert_eq!(m.handle(Input::Escape, t, (9, 0)), None);
         m.shown = true;
         assert_eq!(m.handle(Input::MouseDown { x: 0, y: 0 }, t, (0, 0)), Some(HookEvent::HideNow));
+    }
+
+    #[test]
+    fn double_tap_without_drag_opens_wheel() {
+        let mut m = Machine::new();
+        let t = t0();
+        assert_eq!(m.handle(Input::KeyDown(Mode::Convert), t, (15, 15)), None);
+        assert_eq!(m.handle(Input::KeyUp(Mode::Convert), t + Duration::from_millis(50), (15, 15)), None);
+        let ev = m.handle(Input::KeyDown(Mode::Convert), t + Duration::from_millis(100), (15, 15));
+        assert_eq!(ev, Some(HookEvent::OpenWheel { mode: "convert".into(), x: 15, y: 15, fresh: true }));
+        assert!(m.shown);
     }
 
     #[test]

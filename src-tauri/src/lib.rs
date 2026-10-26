@@ -50,6 +50,8 @@ struct AppState {
     hud_reveal: Mutex<Option<PathBuf>>,
     crop_reply: Mutex<Option<Sender<Option<CropRect>>>>,
     crop_request: Mutex<Option<CropRequest>>,
+    overlay_pos: Mutex<(i32, i32)>,
+    last_cursor: Mutex<(f64, f64)>,
 }
 
 fn state<R: Runtime>(app: &AppHandle<R>) -> tauri::State<'_, AppState> {
@@ -207,22 +209,21 @@ fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
 
     match event {
         tauri::DragDropEvent::Enter { paths, position } => {
-            if paths.is_empty() {
-                return;
-            }
             let (lx, ly) = to_logical(position);
             let paths = to_strings(paths);
             let items = {
                 let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
                 d.active = true;
-                d.paths = paths.clone();
-                wheel::items_for(&st.config, &d.mode, &paths)
+                if !paths.is_empty() {
+                    d.paths = paths.clone();
+                }
+                wheel::items_for(&st.config, &d.mode, &d.paths)
             };
             let _ = app.emit(
                 "overlay:drag_enter",
                 serde_json::json!({
                     "category": wheel::category_for(&paths),
-                    "count": paths.len(),
+                    "count": if paths.is_empty() { 1 } else { paths.len() },
                     "items": items,
                     "x": lx,
                     "y": ly,
@@ -230,10 +231,8 @@ fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
             );
         }
         tauri::DragDropEvent::Over { position } => {
-            if !st.drag.lock().unwrap_or_else(|e| e.into_inner()).active {
-                return;
-            }
             let (lx, ly) = to_logical(position);
+            *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner()) = (lx, ly);
             let _ = app.emit("overlay:drag_over", serde_json::json!({ "x": lx, "y": ly }));
         }
         tauri::DragDropEvent::Leave => {
@@ -241,18 +240,22 @@ fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
             let _ = app.emit("overlay:drag_leave", ());
         }
         tauri::DragDropEvent::Drop { paths, position } => {
-            let (lx, ly) = to_logical(position);
+            let (mut lx, mut ly) = to_logical(position);
+            if lx == 0.0 && ly == 0.0 {
+                let last = *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner());
+                lx = last.0;
+                ly = last.1;
+            }
             let paths = to_strings(paths);
-            let (was_active, mode) = {
+            let mode = {
                 let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
-                let was = d.active;
                 d.active = false;
                 d.paths.clear();
-                (was, d.mode.clone())
+                d.mode.clone()
             };
             hide_overlay_now(app);
 
-            if !was_active || paths.is_empty() {
+            if paths.is_empty() {
                 let _ = app.emit("overlay:drag_drop", serde_json::json!({ "id": null }));
                 return;
             }
@@ -287,27 +290,35 @@ fn on_hook_event(app: &AppHandle, event: hook::HookEvent) {
     match event {
         hook::HookEvent::OpenWheel { mode, x, y, fresh } => {
             if fresh {
-                {
-                    let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
-                    d.mode = mode.clone();
+                st.overlay_gen.fetch_add(1, Ordering::SeqCst);
+                let pos = window_manager::place_and_show_overlay(app, x, y);
+                *st.overlay_pos.lock().unwrap_or_else(|e| e.into_inner()) = pos;
+                *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner()) = (180.0, 180.0);
+            }
+            let items = {
+                let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
+                d.mode = mode.clone();
+                if fresh {
                     d.active = false;
                     d.paths.clear();
                 }
-                st.overlay_gen.fetch_add(1, Ordering::SeqCst);
-                window_manager::place_and_show_overlay(app, x, y);
-                let _ = app.emit("overlay:show", serde_json::json!({ "mode": mode, "fresh": true }));
-            } else {
-                // Switching wheels mid-drag: keep the window where it is and the files we know about.
-                let items = {
-                    let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
-                    d.mode = mode.clone();
-                    d.active.then(|| wheel::items_for(&st.config, &mode, &d.paths))
-                };
-                let _ = app.emit(
-                    "overlay:show",
-                    serde_json::json!({ "mode": mode, "fresh": false, "items": items }),
-                );
-            }
+                wheel::items_for(&st.config, &mode, &d.paths)
+            };
+            let _ = app.emit(
+                "overlay:show",
+                serde_json::json!({ "mode": mode, "fresh": fresh, "items": items }),
+            );
+        }
+        hook::HookEvent::CursorMove { x, y } => {
+            let (win_x, win_y) = *st.overlay_pos.lock().unwrap_or_else(|e| e.into_inner());
+            let scale = app
+                .get_webview_window("overlay")
+                .and_then(|w| w.scale_factor().ok())
+                .unwrap_or(1.0);
+            let lx = (x - win_x) as f64 / scale;
+            let ly = (y - win_y) as f64 / scale;
+            *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner()) = (lx, ly);
+            let _ = app.emit("overlay:drag_over", serde_json::json!({ "x": lx, "y": ly }));
         }
         hook::HookEvent::ScheduleHide => {
             let _ = app.emit("overlay:close", ());
@@ -339,6 +350,8 @@ fn new_state() -> AppState {
         hud_reveal: Mutex::new(None),
         crop_reply: Mutex::new(None),
         crop_request: Mutex::new(None),
+        overlay_pos: Mutex::new((0, 0)),
+        last_cursor: Mutex::new((180.0, 180.0)),
     }
 }
 
