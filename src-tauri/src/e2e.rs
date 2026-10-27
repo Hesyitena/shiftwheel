@@ -93,11 +93,16 @@ fn ok(report: &Report) -> &HudMsg {
 }
 
 fn one_output(report: &Report) -> PathBuf {
-    ok(report);
+    let msg = ok(report);
     assert_eq!(report.outputs.len(), 1, "{:?}", report.outputs);
     let out = report.outputs[0].clone();
     assert!(out.is_file(), "{} missing", out.display());
-    assert!(fs::metadata(&out).unwrap().len() > 0);
+    let len = fs::metadata(&out).unwrap().len();
+    assert!(len > 0);
+    // The finished card names the new file and its size
+    assert_eq!(msg.output, out.file_name().unwrap().to_string_lossy());
+    assert_eq!(msg.out_bytes, len);
+    assert_eq!(msg.linger_ms, crate::jobs::DONE_LINGER_MS);
     out
 }
 
@@ -209,7 +214,9 @@ fn e2e_image_conversions() {
     let src = test_png(t.path(), "photo.png", 64, 48);
     for fmt in ["jpg", "webp", "tiff", "gif", "bmp"] {
         let ui = RecUi::default();
-        let out = one_output(&drop_on("convert", &format!("convert:{fmt}"), &[&src], &ui));
+        let report = drop_on("convert", &format!("convert:{fmt}"), &[&src], &ui);
+        assert_eq!(ok(&report).in_bytes, fs::metadata(&src).unwrap().len(), "before → after sizes");
+        let out = one_output(&report);
         assert_eq!(out.extension().unwrap(), if fmt == "jpg" { "jpg" } else { fmt });
         let img = image::open(&out).unwrap_or_else(|e| panic!("{fmt}: {e}"));
         assert_eq!((img.width(), img.height()), (64, 48), "{fmt}");

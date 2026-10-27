@@ -35,13 +35,40 @@
   #detail:empty { display: none; }
   #show { display: none; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
 
-  /* finished: inverted card, click to show in Explorer */
-  body.done #card { background: var(--ink); color: var(--ground); box-shadow: 0 16px 40px rgba(0, 0, 0, .45); }
-  body.done #sub, body.done #pct, body.done #detail { color: #4a4a4a; }
-  body.done #name { color: var(--ground); }
-  body.done #bar, body.info #bar, body.error #bar { display: none; }
+  body.info #bar, body.error #bar { display: none; }
   body.clickable #card { cursor: pointer; }
-  body.clickable #show { display: block; }
+  body.clickable:not(.done) #show { display: block; }
+
+  /* finished: check badge, the new file, before → after, dots counting down to close */
+  #fin { display: none; align-items: center; gap: 14px; min-width: 0; }
+  body.done #fin { display: flex; }
+  body.done #top, body.done #main, body.done #detail { display: none; }
+  #badge {
+    flex-shrink: 0; width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: var(--ink); color: var(--black); font-family: var(--dot-font); font-size: 22px; font-weight: 900; line-height: 1;
+    animation: land 260ms cubic-bezier(.2, .9, .3, 1.4) backwards;
+  }
+  #badge svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+  #badge path { stroke-dasharray: 24; stroke-dashoffset: 24; animation: tick 260ms 120ms ease-out forwards; }
+  @keyframes land { from { transform: scale(.6); opacity: 0; } }
+  @keyframes tick { to { stroke-dashoffset: 0; } }
+  #finText { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  #finTop { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--sub); white-space: nowrap; }
+  #finTop b { font-weight: 700; color: var(--ink); }
+  #finTop b::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--red); vertical-align: 1px; }
+  #finLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* long names shorten in the middle of the stem; the extension always shows */
+  #finName { display: flex; min-width: 0; font-size: 12.5px; font-weight: 700; color: var(--ink); white-space: nowrap; }
+  #stem { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  #ext { flex-shrink: 0; color: var(--red); }
+  #finMeta { font-size: 10.5px; letter-spacing: .4px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #finMeta:empty { display: none; }
+  #finMeta .gain { color: var(--ink); }
+  #go { flex-shrink: 0; align-self: flex-start; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--mute); text-transform: uppercase; transition: color 120ms, transform 120ms; }
+  body.done:not(.clickable) #go { display: none; }
+  body.done.clickable #card:hover { box-shadow: inset 0 0 0 1px var(--sub), 0 16px 40px rgba(0, 0, 0, .5); }
+  body.done.clickable #card:hover #go { color: var(--red); transform: translate(2px, -2px); }
+  body.done #bar i { width: 4px; height: 4px; justify-self: center; }
   /* failed: red outline, the reason in red */
   body.error #card { box-shadow: inset 0 0 0 1px var(--red), 0 16px 40px rgba(0, 0, 0, .5); }
   body.error #sub { color: var(--ink); }
@@ -69,11 +96,20 @@
   #gotit { margin-left: auto; border: 0; padding: 10px 18px; border-radius: 999px; background: var(--ink); color: var(--ground); font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; cursor: pointer; }
   #gotit:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
 
-  @media (prefers-reduced-motion: reduce) { #bar.busy i { animation: none; } #card { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { #bar.busy i, #badge, #badge path { animation: none; } #badge path { stroke-dashoffset: 0; } #card { transition: none; } }
 </style>
 </head>
 <body class="hidden">
-<div id="card" title="">
+<div id="card">
+  <div id="fin">
+    <div id="badge"></div>
+    <div id="finText">
+      <div id="finTop"><b>Done</b><span id="finLabel"></span></div>
+      <div id="finName"><span id="stem"></span><span id="ext"></span></div>
+      <div id="finMeta"></div>
+    </div>
+    <div id="go">Open ↗</div>
+  </div>
   <div id="top"><div id="sub"></div><div id="pct"></div></div>
   <div id="main"><div id="count"></div><div id="name"></div></div>
   <div id="bar"></div>
@@ -109,12 +145,57 @@
   }
   const dots = [...bar.children];
 
+  // ---------- finished card ----------
+  const CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+  let countdown = 0;
+  function size(b) {
+    if (!b) return '';
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return `${b >= 100 || i === 0 ? Math.round(b) : b.toFixed(1)} ${u[i]}`;
+  }
+  const extOf = (n) => { const m = /\.([^.\s]+)$/.exec(n || ''); return m ? m[1].toUpperCase() : ''; };
+  function paintDone(s) {
+    const many = s.total > 1;
+    $('badge').innerHTML = many ? String(s.total) : CHECK;
+    $('finLabel').textContent = (s.label || '').replace(/\s*·\s*Done$/, '');
+    // the new file (stem shortens, extension stays), else the summary ("8 files saved")
+    const out = s.output || '';
+    const dot = out.lastIndexOf('.');
+    $('stem').textContent = out ? (dot > 0 ? out.slice(0, dot) : out) : (s.detail || s.name);
+    $('ext').textContent = out && dot > 0 ? out.slice(dot) : '';
+    const meta = $('finMeta');
+    meta.replaceChildren();
+    const parts = [];
+    const from = extOf((s.name || '').replace(/ \+\d+$/, '')), to = extOf(out);
+    if (from && to && from !== to) parts.push(`${from} → ${to}`);
+    if (s.in_bytes && s.out_bytes) parts.push(`${size(s.in_bytes)} → ${size(s.out_bytes)}`);
+    else if (s.out_bytes) parts.push(size(s.out_bytes));
+    meta.textContent = parts.join('  ·  ');
+    if (s.in_bytes && s.out_bytes && s.out_bytes < s.in_bytes * 0.95) {
+      const gain = document.createElement('span');
+      gain.className = 'gain';
+      gain.textContent = `  −${Math.round((1 - s.out_bytes / s.in_bytes) * 100)}%`;
+      meta.append(gain);
+    }
+    // the dots go out one by one until the card closes
+    const start = performance.now(), ms = s.linger_ms || 4000;
+    const tick = () => {
+      const left = Math.max(0, 1 - (performance.now() - start) / ms);
+      const lit = Math.ceil(left * DOTS);
+      dots.forEach((d, i) => { d.classList.toggle('on', i < lit); d.classList.remove('head'); });
+      if (left > 0) countdown = requestAnimationFrame(tick);
+    };
+    countdown = requestAnimationFrame(tick);
+  }
+
   window.shiftwheel.onHud((s) => {
+    cancelAnimationFrame(countdown);
     const body = document.body;
     body.classList.remove('hidden', 'first', 'done', 'error', 'info');
     if (s.state !== 'busy') body.classList.add(s.state);
     body.classList.toggle('clickable', Boolean(s.clickable));
-    $('card').title = s.clickable ? 'Show in Explorer' : '';
     const busy = s.state === 'busy';
     $('sub').textContent = busy && s.total > 1 ? `${s.label}  ·  ${s.index} of ${s.total}` : s.label;
     $('count').textContent = s.total > 1 ? `${busy ? s.index : s.total}/${s.total}` : '';
@@ -128,6 +209,7 @@
       d.classList.toggle('on', known && i < lit);
       d.classList.toggle('head', known && busy && i === lit && lit < DOTS);
     });
+    if (s.state === 'done') { bar.classList.remove('busy'); paintDone(s); }
   });
 
   // Click the finished card to see the result in Explorer

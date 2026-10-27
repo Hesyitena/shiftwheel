@@ -24,6 +24,22 @@ pub struct HudMsg {
     pub detail: String,
     /// Clicking the card reveals the result in Explorer.
     pub clickable: bool,
+    /// Finished card: name of the (first) file written, empty if none or several.
+    pub output: String,
+    /// Finished card: size of the selection and of what was written, 0 when unknown.
+    pub in_bytes: u64,
+    pub out_bytes: u64,
+    /// Finished card: how long it stays on screen (the card counts it down).
+    pub linger_ms: u64,
+}
+
+/// How long a finished card stays up.
+pub const DONE_LINGER_MS: u64 = 4000;
+pub const ERROR_LINGER_MS: u64 = 6500;
+
+/// Total size of the files among `paths` (folders count as 0).
+fn bytes_of<P: AsRef<Path>>(paths: &[P]) -> u64 {
+    paths.iter().filter_map(|p| std::fs::metadata(p).ok()).filter(|m| m.is_file()).map(|m| m.len()).sum()
 }
 
 /// Data for the crop editor.
@@ -115,6 +131,7 @@ struct Card<'a> {
     label: &'a str,
     chip: &'a str,
     total: usize,
+    paths: &'a [String],
 }
 
 impl Card<'_> {
@@ -129,6 +146,10 @@ impl Card<'_> {
             state: "busy".into(),
             detail: String::new(),
             clickable: false,
+            output: String::new(),
+            in_bytes: 0,
+            out_bytes: 0,
+            linger_ms: 0,
         }
     }
 
@@ -168,6 +189,17 @@ fn conclude(ui: &dyn Ui, mut report: Report, card: &Card, done_detail: Option<St
         msg.detail = first_err();
     }
     msg.clickable = n_out > 0;
+    msg.linger_ms = if msg.state == "error" { ERROR_LINGER_MS } else { DONE_LINGER_MS };
+    if msg.state == "done" && n_out > 0 {
+        if n_out == 1 && report.outputs[0].is_file() {
+            msg.output = file_name(&report.outputs[0].to_string_lossy());
+        }
+        msg.out_bytes = bytes_of(&report.outputs);
+        // Before → after only makes sense when every input became output (not for copies/moves)
+        if card.chip != "ACTION" && report.skipped.is_empty() {
+            msg.in_bytes = bytes_of(card.paths);
+        }
+    }
 
     ui.sound(if n_err > 0 && n_out == 0 { "error" } else { "done" });
     ui.finish(&msg, report.outputs.last().cloned());
@@ -278,7 +310,7 @@ pub fn run_job(id: &str, paths: &[String], ui: &dyn Ui) -> Report {
         "convert" => {
             let fmt = value.to_uppercase();
             let label = format!("Convert to {fmt}");
-            let card = Card { name, label: &label, chip: &fmt, total };
+            let card = Card { name, label: &label, chip: &fmt, total, paths };
             per_file(ui, paths, &card, parallel_image_job(paths, Some(value)), |p| {
                 converter::convert_file(p, value).map(Outcome::Files)
             })
@@ -288,14 +320,14 @@ pub fn run_job(id: &str, paths: &[String], ui: &dyn Ui) -> Report {
             let bufs: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
             match value {
                 "image.pdf" | "pdf.merge" => {
-                    let card = Card { name, label: &label, chip: "TOOL", total: 1 };
+                    let card = Card { name, label: &label, chip: "TOOL", total: 1, paths };
                     card.busy(ui);
                     let r = if value == "image.pdf" { converter::images_to_combined_pdf(&bufs) } else { converter::merge_pdfs(&bufs) };
                     single(ui, &card, r)
                 }
-                "image.crop" => crop_job(ui, paths, &Card { name, label: &label, chip: "TOOL", total }),
+                "image.crop" => crop_job(ui, paths, &Card { name, label: &label, chip: "TOOL", total, paths }),
                 _ => {
-                    let card = Card { name, label: &label, chip: "TOOL", total };
+                    let card = Card { name, label: &label, chip: "TOOL", total, paths };
                     let parallel = value.starts_with("image.") && parallel_image_job(paths, None);
                     per_file(ui, paths, &card, parallel, |p| converter::run_tool(value, p))
                 }
@@ -337,7 +369,7 @@ fn action_job(ui: &dyn Ui, action: &str, paths: &[String]) -> Report {
         "reveal" => "Explorer",
         _ => "Action",
     };
-    let card = Card { name: selection_name(paths), label, chip: "ACTION", total: paths.len() };
+    let card = Card { name: selection_name(paths), label, chip: "ACTION", total: paths.len(), paths };
     let mut report = Report::default();
     let mut detail = None;
 

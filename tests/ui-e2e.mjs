@@ -241,9 +241,26 @@ await test('hud: progress, then an honest failure', async () => {
 
 await test('hud: finished card reveals the result on click', async () => {
   const p = await open(browser, 'hud.html');
-  await p.send('hud:update', hudMsg({ state: 'done', label: 'Convert to JPG · Done', detail: 'Saved as photo.jpg', percent: 1, clickable: true }));
-  eq(await p.textContent('#detail'), 'Saved as photo.jpg');
-  eq(await p.textContent('#pct'), '');
+  await p.send('hud:update', hudMsg({
+    state: 'done', label: 'Convert to JPG · Done', detail: 'Saved as photo.jpg', percent: 1, clickable: true,
+    output: 'photo.jpg', in_bytes: 2_400_000, out_bytes: 600_000, linger_ms: 400,
+  }));
+  eq(await p.textContent('#finLabel'), 'Convert to JPG');
+  eq(await p.textContent('#stem'), 'photo');
+  eq(await p.textContent('#ext'), '.jpg');
+  eq(await p.textContent('#finMeta'), 'PNG → JPG  ·  2.3 MB → 586 KB  −75%');
+  eq(await p.$eval('#card', (c) => c.title), '', 'no tooltip over the text');
+  assert(await p.isVisible('#badge svg'), 'check mark');
+  // the dots count down to the close
+  const lit = () => p.$$eval('#bar i.on', (d) => d.length);
+  assert((await lit()) > 12, 'starts full');
+  await sleep(500);
+  eq(await lit(), 0, 'counted down');
+  // a batch shows the count and the summary
+  await p.send('hud:update', hudMsg({ state: 'done', name: 'a.png +7', total: 8, label: 'Convert to JPG · Done', detail: '8 files saved', clickable: true, output: '', out_bytes: 1000 }));
+  eq(await p.textContent('#badge'), '8');
+  eq(await p.textContent('#stem'), '8 files saved');
+  eq(await p.textContent('#finMeta'), '1000 B');
   await p.click('#card');
   eq((await p.calls('hud_reveal')).length, 1);
   await p.send('hud:hide', null);

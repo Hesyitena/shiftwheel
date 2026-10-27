@@ -84,7 +84,7 @@ impl Ui for TauriUi {
         window_manager::place_and_show_hud(&self.app, window_manager::HUD_SIZE);
         let _ = self.app.emit("hud:update", msg);
         let app = self.app.clone();
-        let linger = if msg.state == "error" { 6000 } else { 3500 };
+        let linger = msg.linger_ms.max(1000);
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(linger));
             let st = state(&app);
