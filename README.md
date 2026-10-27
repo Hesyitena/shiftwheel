@@ -10,6 +10,17 @@
   Runs entirely locally. No account, no telemetry, no network calls.
 </p>
 
+<p align="center">
+  <a href="https://github.com/Hesyitena/shiftwheel/releases"><img src="https://img.shields.io/github/v/release/Hesyitena/shiftwheel?style=flat-square&label=Release&color=e02424" alt="Release"></a>
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Platform">
+  <img src="https://img.shields.io/badge/Framework-Tauri%20v2-24C8D8?style=flat-square&logo=tauri&logoColor=white" alt="Tauri v2">
+  <img src="https://img.shields.io/badge/Backend-Rust-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
+  <img src="https://img.shields.io/badge/Frontend-Vanilla%20JS%20%2B%20SVG-F7DF1E?style=flat-square&logo=javascript&logoColor=black" alt="Vanilla JS">
+  <img src="https://img.shields.io/badge/Runtime-WebView2-008AD7?style=flat-square&logo=microsoft-edge&logoColor=white" alt="WebView2">
+  <img src="https://img.shields.io/badge/Audio-WebAudio%20API-6C5CE7?style=flat-square" alt="WebAudio">
+  <img src="https://img.shields.io/badge/License-MIT-44CC11?style=flat-square" alt="License">
+</p>
+
 ---
 
 | Key | Wheel | Contents |
@@ -85,6 +96,33 @@ Basic image conversions, image tools, PDF merge/split, and Windows actions run i
 
 ---
 
+## Tech Stack & Architecture
+
+| Component | Technology | Role |
+|---|---|---|
+| **App Framework** | [Tauri v2](https://tauri.app/) | Native windowing, IPC, system tray, and packaging |
+| **Backend Core** | [Rust](https://www.rust-lang.org/) | Core conversions, job scheduler, and memory-safe OS integration |
+| **OS Hooks** | Win32 API (`windows-sys`) | Low-level `WH_MOUSE_LL` and `WH_KEYBOARD_LL` input monitoring |
+| **Shell Integration** | Win32 Shell API | Native folder picker, `SHChangeNotify` instant Explorer refresh |
+| **Image Engine** | [`image`](https://crates.io/crates/image) + [Rayon](https://crates.io/crates/rayon) | Multi-core parallel image decoding, encoding, and filters |
+| **Frontend UI** | HTML5 / CSS3 / Inline SVG | Dot design radial wheel, crop canvas, and progress HUD |
+| **Webview Runtime** | Microsoft Edge WebView2 | Evergreen system-provided web engine |
+| **Sound Engine** | WebAudio API | Dynamic oscillator SFX generation without external audio files |
+| **Packaging** | NSIS | Lightweight per-user standalone installer (~2.25 MB) |
+
+---
+
+## Resource Usage
+
+| Metric | Electron (v0.x) | Tauri v2 + Rust (v1.x) | Difference |
+|---|---|---|---|
+| **Installer Size** | 103.58 MB | 2.25 MB | -97.8% |
+| **Installed Size** | ~280 MB | 4.8 MB | -98.3% |
+| **Idle RAM** | ~85 MB | ~28 MB | -67% |
+| **Startup Time** | ~1.8s | < 300ms | 6× faster |
+
+---
+
 ## Install & Build
 
 ### Download
@@ -115,22 +153,6 @@ npm run dist
 ```
 
 Outputs are generated in `src-tauri/target/release/` and copied to `dist/`.
-
----
-
-## Architecture & Resource Usage
-
-| Metric | Electron (v0.x) | Tauri v2 + Rust (v1.x) | Difference |
-|---|---|---|---|
-| **Installer Size** | 103.58 MB | 2.25 MB | -97.8% |
-| **Installed Size** | ~280 MB | 4.8 MB | -98.3% |
-| **Idle RAM** | ~85 MB | ~28 MB | -67% |
-| **Startup Time** | ~1.8s | < 300ms | 6× faster |
-
-- **Low-level Windows Hooks**: `WH_MOUSE_LL` and `WH_KEYBOARD_LL` run on a dedicated OS thread.
-- **WebView2**: Windows system WebView2 handles rendering for the overlay wheel, crop canvas, and HUD.
-- **WebAudio SFX**: Dynamic UI sound effects synthesized via WebAudio oscillators with automatic context hibernation when idle.
-- **Non-destructive drops**: Intercepts drops with copy semantics to prevent Windows Explorer from deleting source files.
 
 ---
 
