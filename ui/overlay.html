@@ -20,8 +20,8 @@
   .disc { fill: var(--black); stroke: var(--line); stroke-width: 1; }
   #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: 0 18px 50px rgba(0, 0, 0, .55); }
   .sep { stroke: var(--line-soft); stroke-width: 1; stroke-dasharray: 2 4; }
-  .seg { transform-origin: 180px 180px; transition: transform 120ms cubic-bezier(0.2, 0.9, 0.3, 1.2); }
-  .seg.hover { transform: scale(1.025); }
+  .seg { transform-origin: 180px 180px; transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .seg.hover { transform: scale(1.02); }
   /* Highlight: fine dots and a red edge */
   .hl { fill: transparent; }
   .seg.hover .hl { fill: url(#hot-dots); }
@@ -29,25 +29,28 @@
   .seg.hover .arc { stroke: var(--red); }
   text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
   .fmt { font-size: 14px; font-weight: 700; letter-spacing: 1px; }
-  .hint { font-size: 8.5px; letter-spacing: .5px; fill: #7a7a7a; }
   .name { font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
   .icon { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
   .seg.hover .fmt, .seg.hover .name { fill: var(--red); }
-  .seg.hover .hint { fill: var(--ink); }
   .seg.hover .icon { stroke: var(--red); }
   /* A helper program this slice needs is not installed */
   .seg.missing .fmt, .seg.missing .name { fill: var(--off); }
-  .seg.missing .hint { fill: var(--red); }
   .seg.missing .icon { stroke: var(--off); }
   #hole circle { fill: transparent; }
 
-  /* Pointer from the center towards the highlighted slice */
-  #pointerGroup { pointer-events: none; transform-origin: 180px 180px; opacity: 0; transition: transform 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), opacity 100ms ease; }
+  /* Smooth pointer from center towards highlighted slice */
+  #pointerGroup {
+    pointer-events: none;
+    transform-origin: 180px 180px;
+    opacity: 0;
+    transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 150ms ease;
+    will-change: transform, opacity;
+  }
   #pointerGroup.active { opacity: 1; }
-  #pointerGroup.active .pointer-arrow { animation: pointerPulse 650ms infinite alternate ease-in-out; }
+  #pointerGroup.active .pointer-arrow { animation: pointerFloat 1200ms infinite alternate ease-in-out; }
   .pointer-head { fill: var(--ink); }
   .pointer-dot { fill: var(--off); }
-  @keyframes pointerPulse { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+  @keyframes pointerFloat { from { transform: translateY(0); } to { transform: translateY(-2px); } }
 
   /* Center: file preview, name, the slice under the cursor */
   #center {
@@ -261,6 +264,7 @@
   const state = { mode: 'convert', category: null, count: 0, items: null, thumb: null, file_name: null };
   let hover = null; // highlighted segment, or the center hole (cancel)
   let dropped = false;
+  let pointerRot = 0;
   let revealed = false; // stays invisible until the backend reports a file drag over the wheel
 
   function el(tag, attrs, text) {
@@ -325,11 +329,18 @@
       if (thumbBox) thumbBox.style.display = 'none';
     }
 
-    // 2. Pointer towards the highlighted slice
+    // 2. Pointer towards the highlighted slice (shortest-path smooth rotation)
     const pointerGroup = $('pointerGroup');
     const onSlice = hover && hover !== hole;
-    if (onSlice) pointerGroup.style.transform = `rotate(${parseFloat(hover.dataset.mid) + 90}deg)`;
-    pointerGroup.classList.toggle('active', Boolean(onSlice));
+    if (onSlice && hover.dataset.mid !== undefined) {
+      const targetRot = parseFloat(hover.dataset.mid) + 90;
+      let diff = (targetRot - (pointerRot % 360) + 540) % 360 - 180;
+      pointerRot += diff;
+      pointerGroup.style.transform = `rotate(${pointerRot}deg)`;
+      pointerGroup.classList.add('active');
+    } else {
+      pointerGroup.classList.remove('active');
+    }
 
     // 3. Text: file name, then the slice (or what the drop does)
     const needs = onSlice ? hover.dataset.needs : '';
@@ -404,9 +415,7 @@
         lines.forEach((line, j) => text.append(el('tspan', { x, dy: j ? 12 : 0 }, line)));
         g.append(text);
       } else {
-        const note = item.needs || item.hint;
-        g.append(el('text', { class: 'fmt', x, y: note ? y - 5 : y }, item.label));
-        if (note) g.append(el('text', { class: 'hint', x, y: y + 10 }, note));
+        g.append(el('text', { class: 'fmt', x, y }, item.label));
       }
       segs.append(g);
     });

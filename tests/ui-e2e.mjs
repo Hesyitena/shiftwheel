@@ -318,7 +318,6 @@ await test('overlay: missing helper program is shown on the slice and in the cen
   await p.send('overlay:drag_enter', { category: 'image', count: 3, file_name: 'holiday.png', items, x: 5, y: 5 });
   eq(await p.textContent('#fname'), 'holiday.png +2');
   eq(await p.$$eval('.seg', (s) => s.map((g) => g.classList.contains('missing'))), [false, true, false]);
-  eq(await p.$$eval('.seg .hint', (t) => t.map((x) => x.textContent)), ['small', 'ffmpeg', 'doc']);
   await p.send('overlay:drag_over', aim(1, 3));
   eq(await p.textContent('#title'), 'AVIF');
   eq(await p.textContent('#desc'), 'Needs FFmpeg');
