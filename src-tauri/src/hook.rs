@@ -4,11 +4,16 @@
 //! the hook callback never blocks (Windows silently removes hooks that are too slow).
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::time::{Duration, Instant};
 
 const DRAG_THRESHOLD: i32 = 4;
 /// "Tap the key, then start dragging" window.
 const PRE_TAP_WINDOW: Duration = Duration::from_millis(450);
+/// A held key repeats well within this (the longest Windows repeat delay is 1 s). A key marked
+/// held with no event for longer lost its key-up, so its next press counts as new.
+const STUCK_KEY: Duration = Duration::from_millis(1200);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HookEvent {
@@ -140,13 +145,14 @@ impl Machine {
                 None
             }
             Input::KeyDown(mode) => {
-                // If key is already held down, ignore all auto-repeat events completely!
-                if self.key_held[mode.index()] {
+                // Auto-repeat while the key is held is ignored; a key-up that never came is not.
+                let i = mode.index();
+                let repeat = self.key_held[i] && self.last_key_down[i].is_some_and(|t| now.duration_since(t) < STUCK_KEY);
+                self.last_key_down[i] = Some(now);
+                if repeat {
                     return None;
                 }
-                self.key_held[mode.index()] = true;
-                let last = &mut self.last_key_down[mode.index()];
-                *last = Some(now);
+                self.key_held[i] = true;
                 if self.down {
                     self.pre_tap = None;
                     if self.moved {
@@ -215,6 +221,54 @@ pub fn feed(input: Input, cursor: (i32, i32)) -> Option<HookEvent> {
     with_machine(|m| m.handle(input, Instant::now(), cursor)).flatten()
 }
 
+/// Hands events from the hook to the app thread. Mouse moves are merged: at most one waits in
+/// the queue and it carries the latest position when handled. Without this, a fast mouse
+/// queues moves faster than the app handles them, and a mode switch (Shift / Ctrl / Alt) waits
+/// behind that growing backlog, so switching seemed not to work after a few uses.
+#[derive(Default)]
+pub struct Relay {
+    move_pending: AtomicBool,
+    latest: AtomicU64,
+}
+
+impl Relay {
+    pub const fn new() -> Self {
+        Self { move_pending: AtomicBool::new(false), latest: AtomicU64::new(0) }
+    }
+
+    /// Hook side: queue `ev` (never blocks).
+    pub fn post(&self, tx: &Sender<HookEvent>, ev: HookEvent) {
+        if let HookEvent::CursorMove { x, y } = ev {
+            self.latest.store(((x as u32 as u64) << 32) | y as u32 as u64, Ordering::SeqCst);
+            if self.move_pending.swap(true, Ordering::SeqCst) {
+                return; // one is already waiting; it will pick up this position
+            }
+        }
+        let _ = tx.send(ev);
+    }
+
+    /// App side: the event to handle, with a merged move resolved to the newest position.
+    pub fn take(&self, ev: HookEvent) -> HookEvent {
+        match ev {
+            HookEvent::CursorMove { .. } => {
+                self.move_pending.store(false, Ordering::SeqCst);
+                let v = self.latest.load(Ordering::SeqCst);
+                HookEvent::CursorMove { x: (v >> 32) as u32 as i32, y: v as u32 as i32 }
+            }
+            other => other,
+        }
+    }
+
+    /// Run `callback` for every event until the sender is gone.
+    pub fn dispatch(&self, rx: Receiver<HookEvent>, callback: impl Fn(HookEvent)) {
+        for ev in rx {
+            callback(self.take(ev));
+        }
+    }
+}
+
+static RELAY: Relay = Relay::new();
+
 /// Install the hook. `callback` runs on its own thread, never inside the hook procedure.
 pub fn start_hook<F>(enabled: bool, callback: F)
 where
@@ -228,11 +282,7 @@ where
     let (tx, rx) = std::sync::mpsc::channel::<HookEvent>();
     std::thread::Builder::new()
         .name("shiftwheel-hook-events".into())
-        .spawn(move || {
-            for ev in rx {
-                callback(ev);
-            }
-        })
+        .spawn(move || RELAY.dispatch(rx, callback))
         .expect("hook event thread");
     #[cfg(windows)]
     win::install(tx);
@@ -260,7 +310,7 @@ mod win {
     fn send(ev: Option<super::HookEvent>) {
         if let Some(ev) = ev {
             if let Some(tx) = TX.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
-                let _ = tx.send(ev);
+                super::RELAY.post(tx, ev);
             }
         }
     }
@@ -326,6 +376,12 @@ mod win {
 
     pub fn install(tx: Sender<super::HookEvent>) {
         *TX.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+        // One pair of hooks per process; a second start only redirects the events (tests).
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(start_thread);
+    }
+
+    fn start_thread() {
         std::thread::Builder::new()
             .name("shiftwheel-hook".into())
             .spawn(|| unsafe {
@@ -428,6 +484,72 @@ mod tests {
         assert!(m.shown);
     }
 
+    /// Bug: after a few uses the wheel still opened but Shift / Ctrl / Alt no longer switched it.
+    #[test]
+    fn switching_works_on_every_use() {
+        let mut m = Machine::new();
+        let mut t = t0();
+        let ms = Duration::from_millis;
+        for round in 0..20 {
+            m.handle(Input::MouseDown { x: 0, y: 0 }, t, (0, 0));
+            m.handle(Input::MouseMove { x: 20, y: 0 }, t, (20, 0));
+            let open = m.handle(Input::KeyDown(Mode::Convert), t, (20, 0));
+            assert!(matches!(open, Some(HookEvent::OpenWheel { fresh: true, .. })), "round {round}: {open:?}");
+            m.handle(Input::KeyUp(Mode::Convert), t + ms(60), (20, 0));
+            for (i, mode) in [Mode::Tools, Mode::Actions, Mode::Convert].into_iter().enumerate() {
+                let at = t + ms(200 + 150 * i as u64);
+                let ev = m.handle(Input::KeyDown(mode), at, (20, 0));
+                assert_eq!(ev, Some(HookEvent::OpenWheel { mode: mode.name().into(), x: 20, y: 0, fresh: false }), "round {round}");
+                m.handle(Input::KeyUp(mode), at + ms(60), (20, 0));
+            }
+            assert_eq!(m.handle(Input::MouseUp, t + ms(800), (20, 0)), Some(HookEvent::ScheduleHide));
+            t += ms(2000);
+        }
+    }
+
+    #[test]
+    fn a_lost_key_up_does_not_block_the_key() {
+        let mut m = Machine::new();
+        let t = t0();
+        m.handle(Input::MouseDown { x: 0, y: 0 }, t, (0, 0));
+        m.handle(Input::MouseMove { x: 20, y: 0 }, t, (20, 0));
+        m.handle(Input::KeyDown(Mode::Convert), t, (20, 0));
+        // Ctrl goes down, its key-up never arrives (e.g. dropped by Windows)
+        assert!(m.handle(Input::KeyDown(Mode::Tools), t + Duration::from_millis(100), (20, 0)).is_some());
+        // auto-repeat while held is still ignored...
+        assert_eq!(m.handle(Input::KeyDown(Mode::Tools), t + Duration::from_millis(600), (20, 0)), None);
+        m.handle(Input::KeyDown(Mode::Convert), t + Duration::from_millis(700), (20, 0));
+        // ...but a press after a quiet gap is a new press
+        let ev = m.handle(Input::KeyDown(Mode::Tools), t + Duration::from_millis(2500), (20, 0));
+        assert!(matches!(ev, Some(HookEvent::OpenWheel { ref mode, fresh: false, .. }) if mode == "tools"), "{ev:?}");
+    }
+
+    #[test]
+    fn mouse_moves_never_pile_up_ahead_of_a_switch() {
+        let relay = Relay::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        relay.post(&tx, HookEvent::OpenWheel { mode: "convert".into(), x: 0, y: 0, fresh: true });
+        // A fast mouse while the app is busy: thousands of moves
+        for i in 0..5000 {
+            relay.post(&tx, HookEvent::CursorMove { x: i, y: -i });
+        }
+        relay.post(&tx, HookEvent::OpenWheel { mode: "tools".into(), x: 0, y: 0, fresh: false });
+        drop(tx);
+        let got: Vec<HookEvent> = rx.into_iter().map(|e| relay.take(e)).collect();
+        assert_eq!(
+            got,
+            vec![
+                HookEvent::OpenWheel { mode: "convert".into(), x: 0, y: 0, fresh: true },
+                HookEvent::CursorMove { x: 4999, y: -4999 },
+                HookEvent::OpenWheel { mode: "tools".into(), x: 0, y: 0, fresh: false },
+            ]
+        );
+        // After it was handled, the next move is queued again
+        let (tx, rx) = std::sync::mpsc::channel();
+        relay.post(&tx, HookEvent::CursorMove { x: 7, y: 8 });
+        assert_eq!(relay.take(rx.recv().unwrap()), HookEvent::CursorMove { x: 7, y: 8 });
+    }
+
     #[test]
     fn disabled_does_nothing() {
         let mut m = Machine::new();
@@ -474,6 +596,64 @@ mod tests {
         let events: Vec<HookEvent> = rx.recv_timeout(Duration::from_secs(3)).into_iter().chain(rx.recv_timeout(Duration::from_secs(3))).collect();
         assert!(matches!(events.first(), Some(HookEvent::OpenWheel { mode, fresh: true, .. }) if mode == "convert"), "{events:?}");
         assert_eq!(events.get(1), Some(&HookEvent::ScheduleHide), "{events:?}");
+    }
+
+    /// The bug from a real session: with the app slow to handle each mouse move, a mode switch
+    /// had to wait behind every queued move. Drives the real hooks with SendInput.
+    #[cfg(windows)]
+    #[test]
+    fn real_hook_switches_while_the_mouse_moves() {
+        use std::sync::mpsc::channel;
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+            INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN,
+            MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VK_LCONTROL, VK_LSHIFT,
+        };
+        fn mouse(flags: u32, dx: i32, dy: i32) -> INPUT {
+            INPUT { r#type: INPUT_MOUSE, Anonymous: INPUT_0 { mi: MOUSEINPUT { dx, dy, mouseData: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 } } }
+        }
+        fn key(vk: u16, up: bool) -> INPUT {
+            let flags = if up { KEYEVENTF_KEYUP } else { 0 };
+            INPUT { r#type: INPUT_KEYBOARD, Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 } } }
+        }
+        fn send(inputs: &[INPUT]) {
+            unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), std::mem::size_of::<INPUT>() as i32) };
+            std::thread::sleep(Duration::from_millis(60));
+        }
+
+        let _g = GLOBAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = channel();
+        // Each move takes the app 5 ms (like a round trip to the main thread)
+        start_hook(true, move |ev| {
+            if matches!(ev, HookEvent::CursorMove { .. }) {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let _ = tx.send((ev, Instant::now()));
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0, 0), mouse(MOUSEEVENTF_MOVE, 20, 0)]);
+        send(&[key(VK_LSHIFT, false), key(VK_LSHIFT, true)]);
+        // 400 moves in one go: 2 s of work if each were handled
+        let moves: Vec<INPUT> = (0..400).map(|i| mouse(MOUSEEVENTF_MOVE, if i % 2 == 0 { 1 } else { -1 }, 0)).collect();
+        send(&moves);
+        let switched_at = Instant::now();
+        send(&[key(VK_LCONTROL, false), key(VK_LCONTROL, true)]);
+        send(&[mouse(MOUSEEVENTF_LEFTUP, 0, 0)]);
+
+        let mut got = Vec::new();
+        while let Ok(e) = rx.recv_timeout(Duration::from_secs(3)) {
+            let hide = e.0 == HookEvent::ScheduleHide;
+            got.push(e);
+            if hide {
+                break;
+            }
+        }
+        let names: Vec<String> = got.iter().map(|(e, _)| format!("{e:?}")).collect();
+        let tools = got.iter().find(|(e, _)| matches!(e, HookEvent::OpenWheel { mode, fresh: false, .. } if mode == "tools"));
+        let (_, at) = tools.unwrap_or_else(|| panic!("no switch to tools: {names:?}"));
+        assert!(at.duration_since(switched_at) < Duration::from_millis(400), "switch took {:?}", at.duration_since(switched_at));
+        let moves = got.iter().filter(|(e, _)| matches!(e, HookEvent::CursorMove { .. })).count();
+        assert!(moves < 100, "{moves} moves were handled one by one");
+        assert!(matches!(got.last(), Some((HookEvent::ScheduleHide, _))), "{names:?}");
     }
 
     #[test]

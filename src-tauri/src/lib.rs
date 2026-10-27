@@ -51,6 +51,12 @@ struct AppState {
     crop_reply: Mutex<Option<Sender<Option<CropRect>>>>,
     crop_request: Mutex<Option<CropRequest>>,
     overlay_pos: Mutex<(i32, i32)>,
+    /// DPI scale of the open wheel, read once when it opens (asking the window waits on the
+    /// main thread, too slow for every mouse move).
+    overlay_scale: Mutex<f64>,
+    /// Last thumbnail made (path, data URL): a mode switch or drag-enter reuses it instead of
+    /// decoding the photo again.
+    thumb_cache: Mutex<Option<(String, Option<String>)>>,
     last_cursor: Mutex<(f64, f64)>,
     /// The first-run card is waiting to be acknowledged.
     first_run_pending: AtomicBool,
@@ -233,6 +239,18 @@ fn hide_overlay_now<R: Runtime>(app: &AppHandle<R>) {
     window_manager::hide_overlay(app);
 }
 
+fn cached_thumbnail(st: &AppState, path: &str) -> Option<String> {
+    let mut cache = st.thumb_cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((p, thumb)) = cache.as_ref() {
+        if p == path {
+            return thumb.clone();
+        }
+    }
+    let thumb = make_thumbnail(path);
+    *cache = Some((path.to_string(), thumb.clone()));
+    thumb
+}
+
 fn make_thumbnail(path: &str) -> Option<String> {
     let p = Path::new(path);
     if !p.exists() || !p.is_file() {
@@ -258,7 +276,7 @@ fn on_drag_drop(app: &AppHandle, scale: f64, event: &tauri::DragDropEvent) {
             let file_name = first_path.as_ref().and_then(|p| {
                 Path::new(p).file_name().map(|n| n.to_string_lossy().to_string())
             });
-            let thumb = first_path.as_ref().and_then(|p| make_thumbnail(p));
+            let thumb = first_path.as_ref().and_then(|p| cached_thumbnail(&st, p));
             let items = {
                 let mut d = st.drag.lock().unwrap_or_else(|e| e.into_inner());
                 d.active = true;
@@ -344,6 +362,8 @@ fn on_hook_event(app: &AppHandle, event: hook::HookEvent) {
                 st.overlay_gen.fetch_add(1, Ordering::SeqCst);
                 let pos = window_manager::place_and_show_overlay(app, x, y);
                 *st.overlay_pos.lock().unwrap_or_else(|e| e.into_inner()) = pos;
+                let scale = app.get_webview_window("overlay").and_then(|w| w.scale_factor().ok()).unwrap_or(1.0);
+                *st.overlay_scale.lock().unwrap_or_else(|e| e.into_inner()) = scale;
                 *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner()) = (180.0, 180.0);
             }
             let (items, paths, file_name, thumb, category) = {
@@ -355,7 +375,7 @@ fn on_hook_event(app: &AppHandle, event: hook::HookEvent) {
                 let file_name = first_path.as_ref().and_then(|p| {
                     Path::new(p).file_name().map(|n| n.to_string_lossy().to_string())
                 });
-                let thumb = first_path.as_ref().and_then(|p| make_thumbnail(p));
+                let thumb = first_path.as_ref().and_then(|p| cached_thumbnail(&st, p));
                 let category = if paths.is_empty() { None } else { Some(wheel::category_for(&paths)) };
                 (items, paths, file_name, thumb, category)
             };
@@ -374,10 +394,7 @@ fn on_hook_event(app: &AppHandle, event: hook::HookEvent) {
         }
         hook::HookEvent::CursorMove { x, y } => {
             let (win_x, win_y) = *st.overlay_pos.lock().unwrap_or_else(|e| e.into_inner());
-            let scale = app
-                .get_webview_window("overlay")
-                .and_then(|w| w.scale_factor().ok())
-                .unwrap_or(1.0);
+            let scale = *st.overlay_scale.lock().unwrap_or_else(|e| e.into_inner());
             let lx = (x - win_x) as f64 / scale;
             let ly = (y - win_y) as f64 / scale;
             *st.last_cursor.lock().unwrap_or_else(|e| e.into_inner()) = (lx, ly);
@@ -414,6 +431,8 @@ fn new_state() -> AppState {
         crop_reply: Mutex::new(None),
         crop_request: Mutex::new(None),
         overlay_pos: Mutex::new((0, 0)),
+        overlay_scale: Mutex::new(1.0),
+        thumb_cache: Mutex::new(None),
         last_cursor: Mutex::new((180.0, 180.0)),
         first_run_pending: AtomicBool::new(false),
     }
