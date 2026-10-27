@@ -11,7 +11,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/Hesyitena/shiftwheel/releases"><img src="https://img.shields.io/github/v/release/Hesyitena/shiftwheel?style=flat-square&label=Release&color=e02424" alt="Release"></a>
+  <a href="https://github.com/Hesyitena/shiftwheel/releases"><img src="https://img.shields.io/badge/Release-v1.1.0-e02424?style=flat-square" alt="Release"></a>
   <img src="https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows&logoColor=white" alt="Platform">
   <img src="https://img.shields.io/badge/Framework-Tauri%20v2-24C8D8?style=flat-square&logo=tauri&logoColor=white" alt="Tauri v2">
   <img src="https://img.shields.io/badge/Backend-Rust-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
