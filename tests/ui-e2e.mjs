@@ -124,17 +124,19 @@ await test('overlay: settings are pulled on load (no startup race)', async () =>
   eq(await p.oscillators(), 0, 'sound is off, nothing may play');
 });
 
-await test('overlay: a non-file drag never reveals the wheel', async () => {
+await test('overlay: a fresh wheel shows the dragged files at once', async () => {
   const p = await open(browser, 'overlay.html');
-  await p.send('overlay:show', { mode: 'convert', fresh: true });
-  await sleep(400); // the old page revealed itself after 80 ms regardless
-  assert(await p.$eval('#stage', (s) => s.classList.contains('probing')), 'still probing');
-  eq(await p.$$eval('.seg', (s) => s.length), 0, 'no slices drawn');
-  // a stray drag_over (no enter) must not reveal it either
+  await p.send('overlay:show', { mode: 'convert', fresh: true, items: IMAGE_ITEMS, paths: ['C:/a/photo.png', 'C:/a/b.png'], file_name: 'photo.png', category: 'image' });
+  await sleep(50);
+  assert(!(await p.$eval('#stage', (s) => s.classList.contains('probing'))), 'visible');
+  eq(await p.$$eval('.seg', (s) => s.length), IMAGE_ITEMS.length, 'slices drawn');
+  eq(await p.textContent('#fname'), 'photo.png +1');
+  eq(await p.textContent('#title'), '2 images');
+  eq((await p.calls('overlay_revealed')).length, 1);
+  // the cursor position from the hook highlights a slice and points at it
   await p.send('overlay:drag_over', { x: 180, y: 60 });
-  assert(await p.$eval('#stage', (s) => s.classList.contains('probing')), 'stray over ignored');
-  eq(await p.oscillators(), 0, 'no open sound');
-  eq((await p.calls('overlay_revealed')).length, 0);
+  eq(await p.$eval('.seg.hover', (g) => g.dataset.id), IMAGE_ITEMS[0].id);
+  assert(await p.$eval('#pointerGroup', (g) => g.classList.contains('active')), 'pointer shown');
 });
 
 await test('overlay: file drag reveals the backend list and highlights what will run', async () => {
@@ -286,6 +288,71 @@ await test('crop: drawing a selection and Escape', async () => {
   await p.mouse.up();
   eq(await p.textContent('#size'), '200 × 100 px');
   await p.keyboard.press('Escape');
+  eq((await p.calls('crop_done')).map((c) => c.args.rect), [null]);
+});
+
+// ------------------------------------------------------------------------------------------
+// Dot theme additions
+// ------------------------------------------------------------------------------------------
+
+await test('theme: bundled fonts load offline', async () => {
+  const p = await open(browser, 'overlay.html');
+  await p.send('overlay:show', { mode: 'convert', fresh: true });
+  await p.send('overlay:drag_enter', { category: 'image', count: 1, items: IMAGE_ITEMS, ...aim(1, IMAGE_ITEMS.length) });
+  const loaded = await p.evaluate(async () => {
+    await document.fonts.ready;
+    return ['900 34px Doto', '700 14px "Space Mono"', '400 12px "Space Mono"'].map((f) => document.fonts.check(f));
+  });
+  eq(loaded, [true, true, true]);
+  eq(p.errors, []);
+});
+
+await test('overlay: missing helper program is shown on the slice and in the center', async () => {
+  const p = await open(browser, 'overlay.html');
+  const items = [
+    { ...item('convert:jpg', 'JPG'), hint: 'small' },
+    { ...item('convert:avif', 'AVIF'), hint: 'tiny', needs: 'ffmpeg' },
+    { ...item('convert:pdf', 'PDF'), hint: 'doc' },
+  ];
+  await p.send('overlay:show', { mode: 'convert', fresh: true });
+  await p.send('overlay:drag_enter', { category: 'image', count: 3, file_name: 'holiday.png', items, x: 5, y: 5 });
+  eq(await p.textContent('#fname'), 'holiday.png +2');
+  eq(await p.$$eval('.seg', (s) => s.map((g) => g.classList.contains('missing'))), [false, true, false]);
+  eq(await p.$$eval('.seg .hint', (t) => t.map((x) => x.textContent)), ['small', 'ffmpeg', 'doc']);
+  await p.send('overlay:drag_over', aim(1, 3));
+  eq(await p.textContent('#title'), 'AVIF');
+  eq(await p.textContent('#desc'), 'Needs FFmpeg');
+  assert(await p.$eval('#center', (c) => c.classList.contains('missing')), 'center marks it');
+  // the drop still resolves to that slice (the job then explains what to install)
+  eq(await p.evaluate(() => document.body.dataset.pick), 'convert:avif');
+});
+
+await test('first run: shown once, choice is sent back', async () => {
+  const p = await open(browser, 'hud.html', { get_first_run: { autostart: false } });
+  assert(await p.evaluate(() => document.body.classList.contains('first')), 'first-run view');
+  assert(await p.isVisible('#first'), 'card visible');
+  eq(await p.isChecked('#autostart'), false);
+  await p.check('#autostart');
+  await p.click('#gotit');
+  eq((await p.calls('first_run_done')).map((c) => c.args), [{ autostart: true }]);
+  assert(!(await p.isVisible('#first')), 'card gone');
+  eq(p.errors, []);
+});
+
+await test('first run: a job replaces it with the progress card', async () => {
+  const p = await open(browser, 'hud.html');
+  await p.send('hud:first_run', { autostart: true });
+  eq(await p.isChecked('#autostart'), true);
+  await p.send('hud:update', hudMsg({ index: 1, total: 3, percent: 0 }));
+  assert(!(await p.isVisible('#first')), 'first run hidden');
+  eq(await p.textContent('#count'), '1/3');
+  eq(await p.$$eval('#bar i.head', (d) => d.length), 1);
+});
+
+await test('crop: title-bar close cancels', async () => {
+  const p = await open(browser, 'crop.html');
+  await p.send('crop:init', cropReq);
+  await p.click('#close');
   eq((await p.calls('crop_done')).map((c) => c.args.rect), [null]);
 });
 

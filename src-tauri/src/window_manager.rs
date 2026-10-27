@@ -8,8 +8,10 @@ use tauri::{AppHandle, Manager, Runtime};
 pub const OVERLAY_W: f64 = 360.0;
 pub const OVERLAY_H: f64 = 380.0;
 pub const WHEEL_CENTER: f64 = 180.0;
-pub const HUD_W: f64 = 340.0;
-pub const HUD_H: f64 = 92.0;
+/// The progress card window (logical px, including room for the card's shadow).
+pub const HUD_SIZE: (f64, f64) = (372.0, 150.0);
+/// The same window while it shows the first-run card.
+pub const FIRST_RUN_SIZE: (f64, f64) = (400.0, 330.0);
 /// HUD distance from the work-area corner (logical px). The card already has 12-14 px of
 /// transparent padding for its shadow.
 const HUD_MARGIN: f64 = 4.0;
@@ -34,12 +36,12 @@ pub fn anchored_position(wa: WorkArea, x: i32, y: i32, w: f64, h: f64, ax: f64, 
     (clamp(tx, wa.left, wa.right - pw), clamp(ty, wa.top, wa.bottom - ph))
 }
 
-/// Bottom-right corner position (physical) for the HUD.
-pub fn hud_position(wa: WorkArea) -> (i32, i32) {
+/// Bottom-right corner position (physical) for a HUD window of logical size `size`.
+pub fn hud_position(wa: WorkArea, size: (f64, f64)) -> (i32, i32) {
     let m = (HUD_MARGIN * wa.scale).round() as i32;
     (
-        wa.right - (HUD_W * wa.scale).round() as i32 - m,
-        wa.bottom - (HUD_H * wa.scale).round() as i32 - m,
+        wa.right - (size.0 * wa.scale).round() as i32 - m,
+        wa.bottom - (size.1 * wa.scale).round() as i32 - m,
     )
 }
 
@@ -106,10 +108,11 @@ pub fn hide_overlay<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-pub fn place_and_show_hud<R: Runtime>(app: &AppHandle<R>) {
+pub fn place_and_show_hud<R: Runtime>(app: &AppHandle<R>, size: (f64, f64)) {
     if let Some(hud) = app.get_webview_window("hud") {
         let (x, y) = cursor();
-        let pos = hud_position(work_area_at(x, y));
+        let pos = hud_position(work_area_at(x, y), size);
+        let _ = hud.set_size(tauri::Size::Logical(tauri::LogicalSize { width: size.0, height: size.1 }));
         set_physical(&hud, pos);
         let _ = hud.show();
         set_physical(&hud, pos);
@@ -161,8 +164,11 @@ mod tests {
     fn hud_sits_above_taskbar() {
         // 1080p at 125 % with a 60 px taskbar: work area bottom 1020.
         let wa = WorkArea { left: 0, top: 0, right: 1920, bottom: 1020, scale: 1.25 };
-        let (x, y) = hud_position(wa);
-        assert_eq!(x + 425 + 5, 1920);
-        assert_eq!(y + 115 + 5, 1020);
+        let (x, y) = hud_position(wa, HUD_SIZE);
+        assert_eq!(x + (HUD_SIZE.0 * 1.25) as i32 + 5, 1920);
+        assert_eq!(y + (HUD_SIZE.1 * 1.25).round() as i32 + 5, 1020);
+        let (_, y2) = hud_position(wa, FIRST_RUN_SIZE);
+        assert!(y2 < y, "the bigger card grows upwards");
     }
+
 }

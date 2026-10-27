@@ -747,6 +747,18 @@ fn ipc_commands_accept_what_bridge_sends() {
     // hud: invoke('hud_reveal') with nothing to reveal is harmless
     call("hud_reveal", json!({})).unwrap();
 
+    // first run: nothing pending -> null; pending -> the card's data; "Got it" stores it.
+    // Settings go to a scratch folder; autostart is passed back unchanged so the registry is untouched.
+    let scratch = TempDir::new("ipc-settings").unwrap();
+    unsafe { std::env::set_var("APPDATA", scratch.path()) };
+    assert!(call("get_first_run", json!({})).unwrap().is_null());
+    st.first_run_pending.store(true, std::sync::atomic::Ordering::SeqCst);
+    let card = call("get_first_run", json!({})).unwrap();
+    let autostart = card["autostart"].as_bool().expect("autostart flag");
+    call("first_run_done", json!({ "autostart": autostart })).unwrap();
+    assert!(crate::settings::load_settings().onboarded);
+    assert!(call("get_first_run", json!({})).unwrap().is_null());
+
     assert!(call("overlay_drop", json!({})).is_err(), "removed command must not exist");
 }
 

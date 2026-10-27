@@ -4,67 +4,130 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' tauri: asset: data:;">
 <title>Shiftwheel</title>
+<link rel="stylesheet" href="theme.css">
 <style>
-  :root {
-    --surface: #ffffff; --line: rgba(0, 0, 0, .09); --ink: #111111; --sub: #6e6e73; --track: rgba(0, 0, 0, .07); --danger: #d6361f;
-    --shadow: 0 12px 40px rgba(0, 0, 0, .16), 0 1px 3px rgba(0, 0, 0, .10);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root { --surface: #161616; --line: rgba(255, 255, 255, .10); --ink: #f5f5f7; --sub: #98989d; --track: rgba(255, 255, 255, .10); --danger: #ff6b55;
-      --shadow: 0 12px 40px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04); }
-  }
-  html, body { margin: 0; width: 340px; height: 92px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
-  body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+  body { font-family: var(--mono); color: var(--ink); -webkit-font-smoothing: antialiased; }
+
+  /* ---------- progress card ---------- */
   #card {
-    position: absolute; left: 12px; right: 12px; bottom: 14px; min-height: 54px; box-sizing: border-box; padding: 9px 16px;
-    display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 14px;
-    background: var(--surface); border-radius: 12px; box-shadow: var(--shadow); overflow: hidden;
+    position: absolute; right: 12px; bottom: 12px; width: 348px; box-sizing: border-box; padding: 12px 16px 14px;
+    display: flex; flex-direction: column; gap: 8px; border-radius: 14px;
+    background: var(--black); box-shadow: inset 0 0 0 1px var(--line), 0 16px 40px rgba(0, 0, 0, .5);
     transition: transform 160ms ease-out, opacity 160ms ease-out;
   }
-  body.hidden #card { transform: translateY(8px); opacity: 0; }
-  #text { min-width: 0; }
-  #name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #sub { margin-top: 1px; font-size: 11.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #detail { margin-top: 1px; font-size: 11px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  body.hidden #card, body.first #card { transform: translateY(8px); opacity: 0; pointer-events: none; }
+  #top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  #sub { flex: 1; min-width: 0; font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #pct { font-size: 11px; color: var(--sub); font-variant-numeric: tabular-nums; }
+  #main { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  #count { font-family: var(--dot-font); font-size: 30px; font-weight: 900; line-height: 1; white-space: nowrap; }
+  #count:empty { display: none; }
+  #name { flex: 1; min-width: 0; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #bar { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 4px; }
+  #bar i { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+  #bar i.on { background: var(--ink); }
+  #bar i.head { background: var(--red); }
+  /* Unknown progress (LibreOffice, ffmpeg, OCR): a red dot runs along the row */
+  #bar.busy i { animation: run 1.2s steps(1) infinite; }
+  @keyframes run { 0%, 8% { background: var(--red); } 9%, 100% { background: var(--line); } }
+  #detail { font-size: 11px; line-height: 1.45; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #detail:empty { display: none; }
-  body.error #sub, body.error #detail { color: var(--danger); }
-  body.error #bar i { background: var(--danger); }
+  #show { display: none; font-size: 10.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+
+  /* finished: inverted card, click to show in Explorer */
+  body.done #card { background: var(--ink); color: var(--ground); box-shadow: 0 16px 40px rgba(0, 0, 0, .45); }
+  body.done #sub, body.done #pct, body.done #detail { color: #4a4a4a; }
+  body.done #name { color: var(--ground); }
+  body.done #bar, body.info #bar, body.error #bar { display: none; }
   body.clickable #card { cursor: pointer; }
-  body.clickable #card:hover { box-shadow: var(--shadow), 0 0 0 1px var(--line); }
-  #pct { font-size: 12px; font-weight: 500; color: var(--sub); font-variant-numeric: tabular-nums; }
-  #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--track); }
-  #bar i { position: absolute; top: 0; bottom: 0; left: 0; width: 0; background: var(--ink); transition: width 160ms linear; }
-  /* No percentage (LibreOffice, ffmpeg, OCR): a small moving sliver */
-  #bar.busy i { width: 24%; animation: busy 1.2s ease-in-out infinite; transition: none; }
-  @keyframes busy { from { left: -24%; } to { left: 100%; } }
-  @media (prefers-reduced-motion: reduce) { #bar.busy i { animation: none; left: 0; width: 100%; opacity: .3; } #card { transition: none; } }
+  body.clickable #show { display: block; }
+  /* failed: red outline, the reason in red */
+  body.error #card { box-shadow: inset 0 0 0 1px var(--red), 0 16px 40px rgba(0, 0, 0, .5); }
+  body.error #sub { color: var(--ink); }
+  body.error #sub::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 8px; border-radius: 50%; background: var(--red); vertical-align: 1px; }
+  body.error #detail { color: var(--red-soft); white-space: normal; }
+
+  /* ---------- first run ---------- */
+  #first {
+    position: absolute; right: 12px; bottom: 12px; width: 360px; box-sizing: border-box; padding: 20px;
+    display: none; flex-direction: column; gap: 16px; border-radius: 16px;
+    background: var(--black); box-shadow: inset 0 0 0 1px var(--line), 0 20px 50px rgba(0, 0, 0, .55);
+  }
+  body.first #first { display: flex; }
+  #first header { display: flex; align-items: center; justify-content: space-between; }
+  #first h1 { margin: 0; font-family: var(--dot-font); font-size: 30px; font-weight: 900; line-height: 1; }
+  #first header span { width: 10px; height: 10px; border-radius: 50%; background: var(--red); }
+  #first ol { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; font-size: 12px; line-height: 1.4; }
+  #first li { display: flex; gap: 12px; }
+  #first li b { font-weight: 700; }
+  #first li > span:first-child { color: var(--mute); }
+  #first hr { margin: 0; height: 1px; border: 0; background: repeating-linear-gradient(90deg, #3a3a3a 0 2px, transparent 2px 6px); }
+  #first footer { display: flex; align-items: center; gap: 10px; }
+  #first input { width: 16px; height: 16px; margin: 0; accent-color: var(--red); }
+  #first label { font-size: 11.5px; letter-spacing: .5px; text-transform: uppercase; color: var(--sub); }
+  #gotit { margin-left: auto; border: 0; padding: 10px 18px; border-radius: 999px; background: var(--ink); color: var(--ground); font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; cursor: pointer; }
+  #gotit:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+
+  @media (prefers-reduced-motion: reduce) { #bar.busy i { animation: none; } #card { transition: none; } }
 </style>
 </head>
 <body class="hidden">
-<div id="card">
-  <div id="text"><div id="name"></div><div id="sub"></div><div id="detail"></div></div>
-  <div id="pct"></div>
-  <div id="bar"><i></i></div>
+<div id="card" title="">
+  <div id="top"><div id="sub"></div><div id="pct"></div></div>
+  <div id="main"><div id="count"></div><div id="name"></div></div>
+  <div id="bar"></div>
+  <div id="detail"></div>
+  <div id="show">Show in Explorer ↗</div>
 </div>
+
+<section id="first" aria-label="Welcome">
+  <header><h1>READY</h1><span></span></header>
+  <ol>
+    <li><span>01</span><span>drag a file in Explorer</span></li>
+    <li><span>02</span><span>tap <b>shift</b> · <b>ctrl</b> · <b>alt</b></span></li>
+    <li><span>03</span><span>drop on a slice; the center cancels</span></li>
+  </ol>
+  <hr>
+  <footer>
+    <input id="autostart" type="checkbox">
+    <label for="autostart">Start with Windows</label>
+    <button id="gotit" type="button">Got it</button>
+  </footer>
+</section>
+
 <script src="bridge.js"></script>
 <script>
-  // Small progress card in the screen corner while the queue runs
+  // Progress card in the screen corner while the queue runs; also the one-time welcome card.
   const $ = (id) => document.getElementById(id);
-  const fill = document.querySelector('#bar i');
+  const DOTS = 24;
+  const bar = $('bar');
+  for (let i = 0; i < DOTS; i++) {
+    const dot = document.createElement('i');
+    dot.style.animationDelay = `${(i * 1.2) / DOTS}s`;
+    bar.append(dot);
+  }
+  const dots = [...bar.children];
 
   window.shiftwheel.onHud((s) => {
     const body = document.body;
-    body.classList.remove('hidden');
-    body.classList.toggle('error', s.state === 'error');
+    body.classList.remove('hidden', 'first', 'done', 'error', 'info');
+    if (s.state !== 'busy') body.classList.add(s.state);
     body.classList.toggle('clickable', Boolean(s.clickable));
     $('card').title = s.clickable ? 'Show in Explorer' : '';
+    const busy = s.state === 'busy';
+    $('sub').textContent = busy && s.total > 1 ? `${s.label}  ·  ${s.index} of ${s.total}` : s.label;
+    $('count').textContent = s.total > 1 ? `${busy ? s.index : s.total}/${s.total}` : '';
     $('name').textContent = s.name;
-    $('sub').textContent = s.state === 'busy' && s.total > 1 ? `${s.label}  ·  ${s.index} of ${s.total}` : s.label;
     $('detail').textContent = s.detail || '';
     const known = typeof s.percent === 'number';
-    $('bar').classList.toggle('busy', !known);
-    fill.style.width = known ? `${Math.round(s.percent * 100)}%` : '';
-    $('pct').textContent = known && s.state === 'busy' ? `${Math.round(s.percent * 100)}%` : '';
+    $('pct').textContent = known && busy ? `${Math.round(s.percent * 100)}%` : '';
+    bar.classList.toggle('busy', !known);
+    const lit = known ? Math.round(s.percent * DOTS) : 0;
+    dots.forEach((d, i) => {
+      d.classList.toggle('on', known && i < lit);
+      d.classList.toggle('head', known && busy && i === lit && lit < DOTS);
+    });
   });
 
   // Click the finished card to see the result in Explorer
@@ -73,6 +136,21 @@
   });
 
   window.shiftwheel.onHudHide(() => document.body.classList.add('hidden'));
+
+  // ---------- first run ----------
+  function showFirst(d) {
+    if (!d) return;
+    $('autostart').checked = Boolean(d.autostart);
+    document.body.classList.remove('hidden', 'done', 'error', 'info', 'clickable');
+    document.body.classList.add('first');
+  }
+  window.shiftwheel.onFirstRun(showFirst);
+  window.shiftwheel.getFirstRun().then(showFirst).catch(() => {});
+  $('gotit').addEventListener('click', () => {
+    document.body.classList.remove('first');
+    document.body.classList.add('hidden');
+    window.shiftwheel.firstRunDone($('autostart').checked);
+  });
 </script>
 </body>
 </html>

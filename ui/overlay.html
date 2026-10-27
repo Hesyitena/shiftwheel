@@ -4,21 +4,10 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' tauri: asset: data:;">
 <title>Shiftwheel</title>
+<link rel="stylesheet" href="theme.css">
 <style>
-  :root {
-    --surface: #ffffff; --line: rgba(0, 0, 0, .09); --ink: #111111; --sub: #6e6e73; --faint: #a1a1a6;
-    --invert: #ffffff; --danger: #d6361f; --shadow: 0 12px 40px rgba(0, 0, 0, .16), 0 1px 3px rgba(0, 0, 0, .10);
-    --tab: rgba(0, 0, 0, .06);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --surface: #161616; --line: rgba(255, 255, 255, .10); --ink: #f5f5f7; --sub: #98989d; --faint: #636366;
-      --invert: #111111; --danger: #ff6b55; --shadow: 0 12px 40px rgba(0, 0, 0, .55), 0 0 0 1px rgba(255, 255, 255, .04);
-      --tab: rgba(255, 255, 255, .09);
-    }
-  }
   html, body { margin: 0; width: 360px; height: 380px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
-  body { font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+  body { font-family: var(--mono); color: var(--ink); -webkit-font-smoothing: antialiased; }
   #stage { position: absolute; inset: 0; transform-origin: 180px 180px; }
   /* Keep alpha >= 5/255 while probing so Windows DWM/WS_EX_LAYERED hit-testing reliably delivers dragenter */
   #stage.probing { opacity: .03; background: rgba(128, 128, 128, .01); border-radius: 50%; }
@@ -28,102 +17,83 @@
   @keyframes out { to { transform: scale(.98); opacity: 0; } }
 
   svg { position: absolute; left: 0; top: 0; width: 360px; height: 360px; }
-  .disc { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
-  #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: var(--shadow); }
-  .sep { stroke: var(--line); stroke-width: 1; }
+  .disc { fill: var(--black); stroke: var(--line); stroke-width: 1; }
+  #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: 0 18px 50px rgba(0, 0, 0, .55); }
+  .sep { stroke: var(--line-soft); stroke-width: 1; stroke-dasharray: 2 4; }
   .seg { transform-origin: 180px 180px; transition: transform 120ms cubic-bezier(0.2, 0.9, 0.3, 1.2); }
   .seg.hover { transform: scale(1.025); }
-  .hl { fill: transparent; stroke: transparent; stroke-width: 6; stroke-linejoin: round; transition: fill 80ms, stroke 80ms, filter 80ms; }
-  .seg.hover .hl { fill: var(--ink); stroke: var(--ink); filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.22)); }
-
-  /* Dynamic Pointer Arrow towards hovered slice */
-  #pointerGroup {
-    pointer-events: none;
-    transform-origin: 180px 180px;
-    opacity: 0;
-    transition: transform 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), opacity 100ms ease;
-  }
-  #pointerGroup.active {
-    opacity: 1;
-  }
-  #pointerGroup.active .pointer-arrow {
-    animation: pointerPulse 650ms infinite alternate ease-in-out;
-  }
-  .pointer-head {
-    fill: var(--ink);
-    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.3));
-  }
-  .pointer-dot {
-    fill: var(--sub);
-    opacity: 0.85;
-  }
-  @keyframes pointerPulse {
-    0% { transform: translateY(0); }
-    100% { transform: translateY(-4px); }
-  }
-
-  .ptr-finger {
-    display: inline-block;
-    margin-right: 4px;
-    animation: fingerNudge 450ms infinite alternate ease-in-out;
-    transform-origin: center;
-  }
-  @keyframes fingerNudge {
-    from { transform: translateX(0); }
-    to { transform: translateX(3px) scale(1.12); }
-  }
+  /* Highlight: fine dots and a red edge */
+  .hl { fill: transparent; }
+  .seg.hover .hl { fill: url(#hot-dots); }
+  .arc { fill: none; stroke: transparent; stroke-width: 3; stroke-linecap: round; }
+  .seg.hover .arc { stroke: var(--red); }
   text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
-  .fmt { font-size: 12.5px; font-weight: 600; letter-spacing: .3px; }
-  .name { font-size: 10.5px; font-weight: 500; fill: var(--sub); }
+  .fmt { font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .hint { font-size: 8.5px; letter-spacing: .5px; fill: #7a7a7a; }
+  .name { font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
   .icon { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
-  .seg.hover text { fill: var(--invert); }
-  .seg.hover .icon { stroke: var(--invert); }
+  .seg.hover .fmt, .seg.hover .name { fill: var(--red); }
+  .seg.hover .hint { fill: var(--ink); }
+  .seg.hover .icon { stroke: var(--red); }
+  /* A helper program this slice needs is not installed */
+  .seg.missing .fmt, .seg.missing .name { fill: var(--off); }
+  .seg.missing .hint { fill: var(--red); }
+  .seg.missing .icon { stroke: var(--off); }
   #hole circle { fill: transparent; }
 
-  /* Center hole visual elements */
+  /* Pointer from the center towards the highlighted slice */
+  #pointerGroup { pointer-events: none; transform-origin: 180px 180px; opacity: 0; transition: transform 150ms cubic-bezier(0.2, 0.9, 0.3, 1.25), opacity 100ms ease; }
+  #pointerGroup.active { opacity: 1; }
+  #pointerGroup.active .pointer-arrow { animation: pointerPulse 650ms infinite alternate ease-in-out; }
+  .pointer-head { fill: var(--ink); }
+  .pointer-dot { fill: var(--off); }
+  @keyframes pointerPulse { from { transform: translateY(0); } to { transform: translateY(-4px); } }
+
+  /* Center: file preview, name, the slice under the cursor */
   #center {
-    position: absolute; left: 100px; top: 100px; width: 160px; height: 160px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; pointer-events: none; border-radius: 50%; box-sizing: border-box; padding: 6px;
+    position: absolute; left: 100px; top: 100px; width: 160px; height: 160px; box-sizing: border-box; padding: 8px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none;
   }
   #thumbBox {
-    display: none; position: relative; width: 50px; height: 50px; margin-bottom: 4px; border-radius: 10px;
-    overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.22), 0 0 0 1px rgba(255,255,255,0.12);
-    background: var(--surface); flex-shrink: 0; transition: transform 90ms, opacity 90ms;
+    display: none; position: relative; flex-shrink: 0; width: 38px; height: 38px; margin-bottom: 6px; border-radius: 6px;
+    overflow: hidden; background: var(--ground); box-shadow: 0 0 0 1px var(--line); transition: transform 90ms, opacity 90ms;
   }
-  #thumbImg {
-    width: 100%; height: 100%; object-fit: cover; display: block;
-  }
+  #thumbImg { width: 100%; height: 100%; object-fit: cover; display: block; }
   #thumbCount {
-    position: absolute; bottom: 2px; right: 2px; background: rgba(0,0,0,0.78); color: #fff;
-    font-size: 9.5px; font-weight: 700; padding: 1px 4px; border-radius: 5px; line-height: 1.1; display: none;
+    display: none; position: absolute; right: 2px; bottom: 2px; padding: 0 3px; border-radius: 3px;
+    background: var(--red); color: var(--ink); font-size: 8.5px; font-weight: 700; line-height: 1.35;
   }
-  #iconBox {
-    display: none; width: 44px; height: 44px; margin-bottom: 3px;
-    align-items: center; justify-content: center; flex-shrink: 0; transition: transform 90ms, opacity 90ms;
-  }
-  #iconBox svg {
-    position: static; width: 34px; height: 34px; stroke: var(--ink); fill: none;
-    stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
-  }
-  #title { font-size: 13px; font-weight: 600; letter-spacing: -.1px; line-height: 1.25; max-width: 136px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
-  #desc { margin-top: 2px; font-size: 11px; font-weight: 500; line-height: 1.3; color: var(--sub); max-width: 138px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #center.idle #desc { color: var(--sub); }
-  #center.cancel #title { color: var(--danger); font-size: 13px; font-weight: 600; }
-  #center.cancel #desc { color: var(--danger); font-weight: 600; opacity: .95; }
-  #center.cancel #thumbBox, #center.cancel #iconBox { opacity: 0.55; transform: scale(0.94); }
+  #iconBox { display: none; flex-shrink: 0; width: 38px; height: 38px; margin-bottom: 4px; align-items: center; justify-content: center; transition: transform 90ms, opacity 90ms; }
+  #iconBox svg { position: static; width: 28px; height: 28px; fill: none; stroke: var(--sub); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  #fname { max-width: 128px; font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: #8a8a8a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #fname:empty { display: none; }
+  #title { max-width: 140px; margin-top: 2px; font-family: var(--dot-font); font-size: 30px; font-weight: 900; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #center.long #title { font-size: 22px; }
+  #center.xlong #title { font-size: 16px; line-height: 1.1; white-space: normal; }
+  #desc { max-width: 132px; margin-top: 5px; font-size: 10px; line-height: 1.35; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #desc:empty { display: none; }
+  #center.idle #title { font-family: var(--mono); font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--sub); white-space: normal; }
+  #center.cancel #title, #center.cancel #desc { color: var(--red); }
+  #center.cancel #thumbBox, #center.cancel #iconBox { opacity: .45; transform: scale(.94); }
+  #center.missing #title { color: var(--off); }
+  #center.missing #desc { color: var(--red-soft); }
+  .ptr { display: inline-block; margin-right: 4px; color: var(--red); animation: nudge 450ms infinite alternate ease-in-out; }
+  @keyframes nudge { to { transform: translateX(3px); } }
 
   #modes {
-    position: absolute; top: 342px; left: 50%; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px;
-    background: var(--surface); border-radius: 9px; box-shadow: var(--shadow); white-space: nowrap;
+    position: absolute; top: 344px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; padding: 6px 14px;
+    background: rgba(0, 0, 0, .92); border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); white-space: nowrap;
   }
-  .mode { padding: 3px 9px; border-radius: 6px; font-size: 11.5px; font-weight: 500; color: var(--faint); transition: background 90ms, color 90ms; }
-  .mode kbd { font: inherit; font-size: 10.5px; margin-right: 4px; opacity: .8; }
-  .mode.on { background: var(--tab); color: var(--ink); }
+  .mode { display: flex; align-items: center; gap: 6px; font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--mute); }
+  .mode::before { content: ""; width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--mute); }
+  .mode.on { color: var(--ink); }
+  .mode.on::before { background: var(--red); box-shadow: none; }
+  .mode kbd { font: inherit; margin-right: 2px; }
 
   @media (prefers-reduced-motion: reduce) {
     #stage.pop, #stage.closing { animation: none; }
-    .hl, .mode { transition: none; }
+    .seg, #pointerGroup { transition: none; }
+    #pointerGroup.active .pointer-arrow, .ptr { animation: none; }
   }
 </style>
 </head>
@@ -131,6 +101,9 @@
 <div id="stage">
   <div id="discShadow"></div>
   <svg viewBox="0 0 360 360" aria-label="Shiftwheel">
+    <defs>
+      <pattern id="hot-dots" width="5" height="5" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1" fill="#4a4a4a"/></pattern>
+    </defs>
     <circle class="disc" cx="180" cy="180" r="146"/>
     <g id="segs"></g>
     <circle class="disc" cx="180" cy="180" r="80"/>
@@ -145,6 +118,7 @@
   <div id="center" class="idle">
     <div id="thumbBox"><img id="thumbImg" alt="" /><span id="thumbCount"></span></div>
     <div id="iconBox"><svg viewBox="0 0 24 24"><path id="iconPath" /></svg></div>
+    <div id="fname"></div>
     <div id="title"></div>
     <div id="desc"></div>
   </div>
@@ -282,7 +256,8 @@
   // The backend decides which slices a selection gets (and resolves the drop with the same
   // list and geometry), so this page only draws `state.items` and tracks the hover.
   const $ = (id) => document.getElementById(id);
-  const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc');
+  const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc'), fname = $('fname');
+  const NEEDS = { ffmpeg: 'FFmpeg', libreoffice: 'LibreOffice', poppler: 'Poppler' };
   const state = { mode: 'convert', category: null, count: 0, items: null, thumb: null, file_name: null };
   let hover = null; // highlighted segment, or the center hole (cancel)
   let dropped = false;
@@ -350,50 +325,42 @@
       if (thumbBox) thumbBox.style.display = 'none';
     }
 
-    // 2. Compute title and desc & pointer arrow
+    // 2. Pointer towards the highlighted slice
     const pointerGroup = $('pointerGroup');
-    if (hover && hover !== hole && hover.dataset.mid !== undefined) {
-      if (pointerGroup) {
-        const rot = (parseFloat(hover.dataset.mid) + 90);
-        pointerGroup.style.transform = `rotate(${rot}deg)`;
-        pointerGroup.classList.add('active');
-      }
-    } else {
-      if (pointerGroup) pointerGroup.classList.remove('active');
-    }
+    const onSlice = hover && hover !== hole;
+    if (onSlice) pointerGroup.style.transform = `rotate(${parseFloat(hover.dataset.mid) + 90}deg)`;
+    pointerGroup.classList.toggle('active', Boolean(onSlice));
 
+    // 3. Text: file name, then the slice (or what the drop does)
+    const needs = onSlice ? hover.dataset.needs : '';
     let t = '', d = '';
-    if (empty) {
-      t = empty;
-      d = '';
-    } else if (hasFile) {
-      t = state.file_name || `${n} ${kind(n)}`;
-      if (hover === hole) {
-        d = '✕ Drop to cancel';
-      } else if (hover && hover !== hole) {
-        const actionLabel = hover.dataset.caption ? hover.dataset.caption : hover.dataset.label;
-        d = `<span class="ptr-finger">👉</span> ${actionLabel}`;
-      } else {
-        d = n > 1 ? `${n} files · Drop on a slice` : 'Drop on a slice';
-      }
-    } else {
-      if (hover === hole) {
-        t = 'Cancel';
-        d = 'Drop here to cancel';
-      } else if (hover && hover !== hole) {
-        t = hover.dataset.label;
-        const actionLabel = hover.dataset.caption || hover.dataset.label;
-        d = `<span class="ptr-finger">👉</span> ${actionLabel}`;
-      } else {
-        t = 'Shiftwheel';
-        d = 'Drop on a slice';
-      }
-    }
-
+    if (hover === hole) { t = 'Cancel'; d = 'Drop here'; }
+    else if (onSlice) { t = hover.dataset.label; d = needs ? `Needs ${NEEDS[needs] || needs}` : hover.dataset.caption || ''; }
+    else if (empty) t = empty;
+    else if (hasFile) { t = `${n} ${kind(n)}`; d = 'Drop on a slice'; }
+    else t = 'Drop on a slice';
     center.classList.toggle('idle', !hover);
     center.classList.toggle('cancel', hover === hole);
+    center.classList.toggle('missing', Boolean(needs));
+    center.classList.toggle('long', Boolean(hover) && t.length > 5 && t.length <= 9);
+    center.classList.toggle('xlong', Boolean(hover) && t.length > 9);
+    // The thumbnail carries its own "+N" badge
+    const more = n > 1 && !state.thumb ? ` +${n - 1}` : '';
+    fname.textContent = state.file_name ? state.file_name + more : '';
     title.textContent = t;
-    desc.innerHTML = d;
+    desc.textContent = d === t ? '' : d;
+    if (onSlice && d && !needs) {
+      const ptr = document.createElement('span');
+      ptr.className = 'ptr';
+      ptr.textContent = '→';
+      desc.prepend(ptr);
+    }
+  }
+
+  // The red edge on the highlighted slice
+  function arcPath(a1, a2) {
+    const ra = R - 5, b1 = a1 + 4, b2 = a2 - 4;
+    return `M${fmt(point(ra, b1))}A${ra} ${ra} 0 ${b2 - b1 > 180 ? 1 : 0} 1 ${fmt(point(ra, b2))}`;
   }
 
   function setHover(target) {
@@ -418,9 +385,13 @@
     list.forEach((item, i) => {
       const mid = -90 + i * step;
       const a1 = mid - step / 2;
-      const g = el('g', { class: 'seg', 'data-id': item.id, 'data-label': item.label, 'data-caption': item.caption, 'data-mid': mid });
-      // Hit area = the full sector (transparent); highlight = the inset sector
+      const g = el('g', {
+        class: item.needs ? 'seg missing' : 'seg', 'data-id': item.id, 'data-label': item.label,
+        'data-caption': item.caption || '', 'data-needs': item.needs || '', 'data-mid': mid,
+      });
+      // Hit area = the full sector (transparent); highlight = the inset sector filled with fine dots
       g.append(el('path', { d: sectorPath(a1, mid + step / 2), class: 'hl' }));
+      g.append(el('path', { d: arcPath(a1, mid + step / 2), class: 'arc' }));
       if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
       const [x, y] = point((R + r) / 2, mid);
       if (ICONS[item.icon]) {
@@ -433,7 +404,9 @@
         lines.forEach((line, j) => text.append(el('tspan', { x, dy: j ? 12 : 0 }, line)));
         g.append(text);
       } else {
-        g.append(el('text', { class: 'fmt', x, y }, item.label));
+        const note = item.needs || item.hint;
+        g.append(el('text', { class: 'fmt', x, y: note ? y - 5 : y }, item.label));
+        if (note) g.append(el('text', { class: 'hint', x, y: y + 10 }, note));
       }
       segs.append(g);
     });
@@ -470,7 +443,8 @@
     state.count = p.count || 1;
     state.file_name = p.file_name || null;
     state.thumb = p.thumb || null;
-    if (Array.isArray(p.items) && p.items.length) state.items = p.items;
+    // An empty list is an answer too (a type with nothing to convert to)
+    if (Array.isArray(p.items)) state.items = p.items;
     render();
     revealWheel();
     if (hasPoint(p)) setHover(segmentAt(p.x, p.y));
@@ -494,9 +468,7 @@
     state.mode = p.mode;
     dropped = false;
     stage.classList.remove('closing');
-    if (Array.isArray(p.items) && p.items.length) {
-      state.items = p.items;
-    }
+    if (Array.isArray(p.items)) state.items = p.items;
     if (p.file_name) state.file_name = p.file_name;
     if (p.thumb) state.thumb = p.thumb;
     if (p.category) state.category = p.category;
@@ -508,7 +480,7 @@
       if (!p.category) state.category = null;
       if (!p.thumb) state.thumb = null;
       if (!p.file_name) state.file_name = null;
-      if (!p.count) state.count = 0;
+      if (!(Array.isArray(p.paths) && p.paths.length) && !p.count) state.count = 0;
       render();
       revealWheel();
       return;

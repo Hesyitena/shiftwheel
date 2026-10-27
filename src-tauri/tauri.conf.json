@@ -27,8 +27,8 @@
         "label": "hud",
         "title": "Shiftwheel HUD",
         "url": "hud.html",
-        "width": 340,
-        "height": 92,
+        "width": 372,
+        "height": 150,
         "transparent": true,
         "decorations": false,
         "alwaysOnTop": true,
@@ -41,12 +41,13 @@
         "label": "crop",
         "title": "Crop",
         "url": "crop.html",
-        "width": 980,
+        "width": 1000,
         "height": 720,
-        "minWidth": 640,
-        "minHeight": 480,
+        "minWidth": 720,
+        "minHeight": 520,
         "resizable": true,
-        "visible": false
+        "visible": false,
+        "decorations": false
       }
     ],
     "security": {

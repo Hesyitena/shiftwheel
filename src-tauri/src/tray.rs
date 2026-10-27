@@ -2,9 +2,13 @@ use crate::hook;
 use crate::settings::{is_autostart_enabled, load_settings, save_settings, set_autostart};
 use tauri::menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
-use tauri::{AppHandle, Emitter};
+use tauri::menu::CheckMenuItem;
+use tauri::{AppHandle, Emitter, Runtime};
 
-pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, Box<dyn std::error::Error>> {
+/// The tray's "Start with Windows" item, kept so the first-run card can update its check mark.
+pub struct AutostartItem<R: Runtime>(pub CheckMenuItem<R>);
+
+pub fn create_tray(app: &AppHandle) -> Result<(TrayIcon, CheckMenuItem<tauri::Wry>), Box<dyn std::error::Error>> {
     let settings = load_settings();
     let autostart = is_autostart_enabled();
 
@@ -79,5 +83,5 @@ pub fn create_tray(app: &AppHandle) -> Result<TrayIcon, Box<dyn std::error::Erro
         })
         .build(app)?;
 
-    Ok(tray)
+    Ok((tray, autostart_item))
 }

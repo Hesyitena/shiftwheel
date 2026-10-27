@@ -3,6 +3,7 @@
 
 use crate::config::{WheelConfig, WheelItem};
 use crate::converter::{category_of, ext_of};
+use crate::external::Program;
 use std::path::Path;
 
 /// Wheel geometry in logical pixels (must match overlay.html).
@@ -49,19 +50,75 @@ pub fn common_ext(paths: &[String]) -> Option<String> {
     Some(first)
 }
 
-pub fn items_for(conf: &WheelConfig, mode: &str, paths: &[String]) -> Vec<WheelItem> {
-    let category = category_for(paths);
-    let count = paths.len();
-    let list: Vec<WheelItem> = match mode {
-        "actions" => conf.actions.clone(),
-        "tools" => conf.tools.get(category).cloned().unwrap_or_else(|| {
-            conf.tools.get("image").cloned().unwrap_or_default()
-        }),
-        _ if !paths.is_empty() && category == "folder" => Vec::new(),
-        _ => conf.convert.get(category).cloned().unwrap_or_else(|| {
-            conf.convert.get("image").cloned().unwrap_or_default()
-        }),
+/// Helper programs a slice can run with (any one of them is enough); empty = none needed.
+fn requirement(category: &str, id: &str) -> &'static [Program] {
+    const FFMPEG: &[Program] = &[Program::Ffmpeg];
+    const OFFICE: &[Program] = &[Program::Soffice];
+    let Some((kind, value)) = id.split_once(':') else { return &[] };
+    match (kind, category, value) {
+        ("convert", "audio" | "video", _) => FFMPEG,
+        ("convert", "image", "avif") => FFMPEG,
+        ("convert", "image", _) => &[],
+        ("convert", "pdf", "jpg" | "png") => &[Program::Pdftoppm, Program::Soffice],
+        ("convert", "pdf", "txt") => &[Program::Pdftotext, Program::Soffice],
+        ("convert", _, _) => OFFICE,
+        ("tool", _, t) if t.starts_with("audio.") || t.starts_with("video.") => FFMPEG,
+        ("tool", _, "pdf.images") => &[Program::Pdftoppm, Program::Soffice],
+        _ => &[],
+    }
+}
+
+/// Short name shown on a slice whose program is missing.
+fn short_name(p: Program) -> &'static str {
+    match p {
+        Program::Ffmpeg | Program::Ffprobe => "ffmpeg",
+        Program::Soffice => "libreoffice",
+        Program::Pdftoppm | Program::Pdftotext => "poppler",
+    }
+}
+
+/// Mark items whose helper program is not installed (`has` answers "is it installed?").
+pub fn mark_missing(items: &mut [WheelItem], category: &str, has: impl Fn(Program) -> bool) {
+    let mut known: Vec<(Program, bool)> = Vec::new();
+    let mut installed = |p: Program| {
+        if let Some((_, v)) = known.iter().find(|(q, _)| *q == p) {
+            return *v;
+        }
+        let v = has(p);
+        known.push((p, v));
+        v
     };
+    for item in items {
+        let req = requirement(category, &item.id);
+        if !req.is_empty() && !req.iter().any(|p| installed(*p)) {
+            item.needs = Some(short_name(req[0]).to_string());
+        }
+    }
+}
+
+pub fn items_for(conf: &WheelConfig, mode: &str, paths: &[String]) -> Vec<WheelItem> {
+    let mut items = items_for_unmarked(conf, mode, paths);
+    let category = if paths.is_empty() { "image" } else { category_for(paths) };
+    mark_missing(&mut items, category, |p| crate::external::find(p).is_some());
+    items
+}
+
+fn items_for_unmarked(conf: &WheelConfig, mode: &str, paths: &[String]) -> Vec<WheelItem> {
+    let category = category_for(paths);
+    // Before the files are known (paths empty) the wheel previews the image lists; a known
+    // type without a list gets no slices, so nothing runs that can't handle it.
+    let lists = match mode {
+        "actions" => return filter_list(conf.actions.clone(), paths),
+        "tools" => &conf.tools,
+        _ if !paths.is_empty() && category == "folder" => return Vec::new(),
+        _ => &conf.convert,
+    };
+    let key = if paths.is_empty() { "image" } else { category };
+    filter_list(lists.get(key).cloned().unwrap_or_default(), paths)
+}
+
+fn filter_list(list: Vec<WheelItem>, paths: &[String]) -> Vec<WheelItem> {
+    let count = paths.len();
     let same = common_ext(paths).map(|e| format!("convert:{e}"));
     list.into_iter()
         .filter(|item| !item.multi.unwrap_or(false) || count > 1)
@@ -113,6 +170,26 @@ mod tests {
         let dir = std::env::temp_dir().to_string_lossy().to_string();
         assert!(items_for(&conf, "convert", std::slice::from_ref(&dir)).is_empty());
         assert_eq!(items_for(&conf, "actions", &[dir]).len(), conf.actions.len());
+    }
+
+    #[test]
+    fn missing_programs_are_marked() {
+        let conf = get_wheel_config();
+        let mut img = items_for_unmarked(&conf, "convert", &["a.png".into()]);
+        mark_missing(&mut img, "image", |_| false);
+        let needs = |items: &[WheelItem], id: &str| items.iter().find(|i| i.id == id).unwrap().needs.clone();
+        assert_eq!(needs(&img, "convert:avif").as_deref(), Some("ffmpeg"));
+        assert_eq!(needs(&img, "convert:jpg"), None, "native formats need nothing");
+
+        let mut pdf = items_for_unmarked(&conf, "convert", &["a.pdf".into()]);
+        mark_missing(&mut pdf, "pdf", |p| p == Program::Soffice);
+        assert_eq!(needs(&pdf, "convert:png"), None, "LibreOffice is an alternative to Poppler");
+        mark_missing(&mut pdf, "pdf", |_| false);
+        assert_eq!(needs(&pdf, "convert:docx").as_deref(), Some("libreoffice"));
+
+        let mut video = items_for_unmarked(&conf, "tools", &["a.mp4".into()]);
+        mark_missing(&mut video, "video", |p| p == Program::Ffmpeg);
+        assert!(video.iter().all(|i| i.needs.is_none()));
     }
 
     #[test]

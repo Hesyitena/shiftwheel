@@ -20,6 +20,8 @@
 
 Tap another key mid-drag to switch wheels. Drop on the center hole, release outside the wheel, or press <kbd>Esc</kbd> to cancel. Output files are saved next to the original (`report.pdf`, `photo (compressed).jpg`, `name (1).ext`) — originals are never modified or overwritten.
 
+Slices that need a helper program you have not installed yet are dimmed and say which one (for example AVIF → `ffmpeg`). On the first start a small card explains the three keys and offers *Start with Windows*.
+
 Every job shows a small progress card in the bottom-right corner (above the taskbar). When it finishes, the card says what was saved — or why it failed — and clicking it highlights the new file in Explorer. Jobs run one after another, so dropping more files while one is running simply queues them; within a job, batches of images are processed on several cores.
 
 ---

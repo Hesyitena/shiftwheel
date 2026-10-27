@@ -12,6 +12,12 @@ pub struct WheelItem {
     pub multi: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interactive: Option<String>,
+    /// A one-word note under the label on the wheel ("web", "print").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+    /// Set by `wheel::items_for` when a helper program this slice needs is missing ("ffmpeg").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub needs: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +25,38 @@ pub struct WheelConfig {
     pub convert: HashMap<String, Vec<WheelItem>>,
     pub tools: HashMap<String, Vec<WheelItem>>,
     pub actions: Vec<WheelItem>,
+}
+
+/// Short note shown under a format on the wheel.
+fn format_hint(fmt: &str) -> Option<&'static str> {
+    Some(match fmt {
+        "jpg" => "small",
+        "png" => "lossless",
+        "webp" => "web",
+        "avif" => "tiny",
+        "tiff" => "print",
+        "gif" => "anim",
+        "bmp" => "raw",
+        "pdf" => "doc",
+        "txt" => "text",
+        "docx" => "word",
+        "odt" | "ods" | "odp" => "open",
+        "rtf" => "rich",
+        "html" => "web",
+        "xlsx" => "excel",
+        "csv" => "data",
+        "pptx" => "slides",
+        "mp3" => "audio",
+        "m4a" => "aac",
+        "wav" | "aiff" => "raw",
+        "flac" => "lossless",
+        "ogg" => "vorbis",
+        "opus" => "small",
+        "mp4" | "mkv" => "h.264",
+        "mov" => "apple",
+        "webm" => "vp9",
+        _ => return None,
+    })
 }
 
 fn conv(fmt: &str, caption: Option<&str>) -> WheelItem {
@@ -31,6 +69,8 @@ fn conv(fmt: &str, caption: Option<&str>) -> WheelItem {
         icon: None,
         multi: None,
         interactive: None,
+        hint: format_hint(fmt).map(str::to_string),
+        needs: None,
     }
 }
 
@@ -50,6 +90,8 @@ fn tool(
         icon: Some(icon.to_string()),
         multi: if multi { Some(true) } else { None },
         interactive: interactive.map(|s| s.to_string()),
+        hint: None,
+        needs: None,
     }
 }
 
@@ -61,6 +103,8 @@ fn action(id: &str, label: &str, caption: &str, icon: &str) -> WheelItem {
         icon: Some(icon.to_string()),
         multi: None,
         interactive: None,
+        hint: None,
+        needs: None,
     }
 }
 

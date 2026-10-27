@@ -28,12 +28,15 @@ The app targets Windows, but the crate also builds on Linux/macOS (Win32 code is
 - `src-tauri/src/window_manager.rs` – overlay/HUD placement in physical pixels using the target monitor's DPI and work area.
 - `src-tauri/src/config.rs` – wheel contents (`convert:<fmt>`, `tool:<cat>.<id>`, `action:<id>`).
 - `src-tauri/src/e2e.rs` – end-to-end tests: drop position → slice → job with real helper programs → output checked; IPC contract tests.
-- `ui/` – static pages (no bundler): `overlay.html`, `hud.html`, `crop.html`, `bridge.js` (`window.shiftwheel`).
+- `ui/` – static pages (no bundler): `overlay.html` (wheel), `hud.html` (progress card and the one-time first-run card), `crop.html` (crop editor, custom title bar), `bridge.js` (`window.shiftwheel`), `theme.css` (the "Dot" look: tokens and bundled fonts in `ui/fonts/`, OFL).
 - `tests/ui-e2e.mjs` – UI tests with a recording fake of the Tauri bridge.
 
 ## Conventions and gotchas
 
 - Wheel geometry (center 180, inner radius 80, outer 146, hit radius 166) lives in `wheel.rs` and `overlay.html::segmentAt`. The UI test checks them point by point against vectors exported from Rust.
+- The app works offline and the CSP only allows local files: fonts and assets are bundled under `ui/`, never loaded from the web.
+- `wheel::items_for` marks a slice with `needs` when its helper program is missing; the overlay dims it and the drop still runs (the job explains what to install).
+- The HUD window resizes per view (`window_manager::HUD_SIZE` / `FIRST_RUN_SIZE`); keep the card anchored bottom-right in `hud.html`.
 - Every id in `config.rs` needs an implementation (`jobs::known_tool` / `known_action`); a test enforces it.
 - Outputs go next to the source through `actions::write_unique` (claims the name with create-new, so parallel jobs can't collide). Never overwrite the source or an existing file (LibreOffice writes into a temp folder first for this reason).
 - Batches of pure image work run on up to 4 threads (`jobs::per_file` with `parallel`); FFmpeg/LibreOffice jobs stay sequential.

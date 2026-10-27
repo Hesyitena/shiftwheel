@@ -1,0 +1,20 @@
+/* Shiftwheel "Dot" theme: monochrome, dot-matrix display type, one red signal.
+   Fonts are bundled (the app works offline); licenses in fonts/OFL-*.txt. */
+@font-face { font-family: "Doto"; src: url("fonts/doto.woff2") format("woff2"); font-weight: 100 900; font-display: block; }
+@font-face { font-family: "Space Mono"; src: url("fonts/space-mono-400.woff2") format("woff2"); font-weight: 400; font-display: block; }
+@font-face { font-family: "Space Mono"; src: url("fonts/space-mono-700.woff2") format("woff2"); font-weight: 700; font-display: block; }
+
+:root {
+  --black: #000000;
+  --ground: #0b0b0b;
+  --line: #2a2a2a;
+  --line-soft: #262626;
+  --ink: #f2f2f2;
+  --sub: #a8a8a8;
+  --mute: #6e6e6e;
+  --off: #4a4a4a;
+  --red: #ff3b30;
+  --red-soft: #ff8079;
+  --dot-font: "Doto", "Space Mono", ui-monospace, monospace;
+  --mono: "Space Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}

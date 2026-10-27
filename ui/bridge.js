@@ -23,6 +23,10 @@
     onHud: on('hud:update'),
     onHudHide: on('hud:hide'),
     hudReveal: () => invoke('hud_reveal'),
+    // first run (shown in the progress-card window)
+    getFirstRun: () => invoke('get_first_run'),
+    onFirstRun: on('hud:first_run'),
+    firstRunDone: (autostart) => invoke('first_run_done', { autostart: Boolean(autostart) }),
     // crop editor
     getCropRequest: () => invoke('get_crop_request'),
     onCropInit: on('crop:init'),

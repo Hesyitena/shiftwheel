@@ -15,7 +15,7 @@ mod window_manager;
 use converter::CropRect;
 use jobs::{CropRequest, HudMsg, Job, JobQueue, Ui};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -52,6 +52,8 @@ struct AppState {
     crop_request: Mutex<Option<CropRequest>>,
     overlay_pos: Mutex<(i32, i32)>,
     last_cursor: Mutex<(f64, f64)>,
+    /// The first-run card is waiting to be acknowledged.
+    first_run_pending: AtomicBool,
 }
 
 fn state<R: Runtime>(app: &AppHandle<R>) -> tauri::State<'_, AppState> {
@@ -71,7 +73,7 @@ impl Ui for TauriUi {
         let st = state(&self.app);
         st.hud_gen.fetch_add(1, Ordering::SeqCst);
         *st.hud_reveal.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        window_manager::place_and_show_hud(&self.app);
+        window_manager::place_and_show_hud(&self.app, window_manager::HUD_SIZE);
         let _ = self.app.emit("hud:update", msg);
     }
 
@@ -79,7 +81,7 @@ impl Ui for TauriUi {
         let st = state(&self.app);
         let generation = st.hud_gen.fetch_add(1, Ordering::SeqCst) + 1;
         *st.hud_reveal.lock().unwrap_or_else(|e| e.into_inner()) = reveal;
-        window_manager::place_and_show_hud(&self.app);
+        window_manager::place_and_show_hud(&self.app, window_manager::HUD_SIZE);
         let _ = self.app.emit("hud:update", msg);
         let app = self.app.clone();
         let linger = if msg.state == "error" { 6000 } else { 3500 };
@@ -174,6 +176,35 @@ fn crop_done<R: Runtime>(app: AppHandle<R>, rect: Option<CropRect>) {
 #[tauri::command]
 fn get_crop_request<R: Runtime>(app: AppHandle<R>) -> Option<CropRequest> {
     state(&app).crop_request.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn first_run_payload() -> serde_json::Value {
+    serde_json::json!({ "autostart": settings::is_autostart_enabled() })
+}
+
+/// The first-run card asks for its data once loaded (the event may have come earlier).
+#[tauri::command]
+fn get_first_run<R: Runtime>(app: AppHandle<R>) -> Option<serde_json::Value> {
+    state(&app).first_run_pending.load(Ordering::SeqCst).then(first_run_payload)
+}
+
+/// "Got it" on the first-run card.
+#[tauri::command]
+fn first_run_done<R: Runtime>(app: AppHandle<R>, autostart: bool) {
+    let st = state(&app);
+    st.first_run_pending.store(false, Ordering::SeqCst);
+    let mut s = settings::load_settings();
+    s.onboarded = true;
+    settings::save_settings(&s);
+    if settings::is_autostart_enabled() != autostart {
+        settings::set_autostart(autostart);
+    }
+    if let Some(item) = app.try_state::<tray::AutostartItem<R>>() {
+        let _ = item.0.set_checked(autostart);
+    }
+    st.hud_gen.fetch_add(1, Ordering::SeqCst);
+    let _ = app.emit("hud:hide", ());
+    window_manager::hide_hud(&app);
 }
 
 /// Click on the progress card: show the result in Explorer.
@@ -384,12 +415,13 @@ fn new_state() -> AppState {
         crop_request: Mutex::new(None),
         overlay_pos: Mutex::new((0, 0)),
         last_cursor: Mutex::new((180.0, 180.0)),
+        first_run_pending: AtomicBool::new(false),
     }
 }
 
 /// The commands bridge.js can call.
 fn commands<R: Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
-    tauri::generate_handler![get_settings, overlay_revealed, crop_done, get_crop_request, hud_reveal]
+    tauri::generate_handler![get_settings, overlay_revealed, crop_done, get_crop_request, hud_reveal, get_first_run, first_run_done]
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -401,7 +433,20 @@ pub fn run() {
             app.handle().plugin(tauri_plugin_log::Builder::default().level(log::LevelFilter::Info).build())?;
             let handle = app.handle().clone();
             let s = settings::load_settings();
-            tray::create_tray(&handle)?;
+            let (_tray, autostart_item) = tray::create_tray(&handle)?;
+            app.manage(tray::AutostartItem(autostart_item));
+
+            if !s.onboarded {
+                state(&handle).first_run_pending.store(true, Ordering::SeqCst);
+                let h = handle.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(1500));
+                    if state(&h).first_run_pending.load(Ordering::SeqCst) {
+                        window_manager::place_and_show_hud(&h, window_manager::FIRST_RUN_SIZE);
+                        let _ = h.emit("hud:first_run", first_run_payload());
+                    }
+                });
+            }
 
             *state(&handle).jobs.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(JobQueue::start(Arc::new(TauriUi { app: handle.clone() })));

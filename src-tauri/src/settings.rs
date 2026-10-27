@@ -16,8 +16,9 @@ const APP_NAME: &str = "Shiftwheel\0";
 pub struct AppSettings {
     #[serde(default = "default_true")]
     pub sound: bool,
+    /// The first-run card was acknowledged.
     #[serde(default = "default_false")]
-    pub first_run: bool,
+    pub onboarded: bool,
     /// Tray "Enabled" toggle, kept across restarts.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -35,7 +36,7 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             sound: true,
-            first_run: false,
+            onboarded: false,
             enabled: true,
         }
     }
