@@ -66,6 +66,8 @@ pub struct Machine {
     last_key_down: [Option<Instant>; 3],
     last_tap: [Option<Instant>; 3],
     key_held: [bool; 3],
+    /// Is a file drag (OLE drag-and-drop) in progress? `None` = assume yes (tests, non-Windows).
+    pub drag_probe: Option<fn() -> bool>,
 }
 
 impl Machine {
@@ -79,6 +81,10 @@ impl Machine {
         self.pending_mode = None;
         self.pre_tap = None;
         self.key_held = [false; 3];
+    }
+
+    fn dragging(&self) -> bool {
+        self.drag_probe.is_none_or(|f| f())
     }
 
     fn open(&mut self, mode: Mode, cursor: (i32, i32)) -> HookEvent {
@@ -112,12 +118,12 @@ impl Machine {
                 }
                 if self.down && !self.moved {
                     let (dx, dy) = ((x - self.x0) as i64, (y - self.y0) as i64);
-                    if dx * dx + dy * dy >= (DRAG_THRESHOLD * DRAG_THRESHOLD) as i64 {
-                        self.moved = true;
-                        if let Some(mode) = self.pending_mode.take() {
-                            return Some(self.open(mode, (x, y)));
-                        }
-                    }
+                    self.moved = dx * dx + dy * dy >= (DRAG_THRESHOLD * DRAG_THRESHOLD) as i64;
+                }
+                // Open only once a file is really being dragged (not a rubber-band selection etc.).
+                if self.down && self.moved && self.pending_mode.is_some() && self.dragging() {
+                    let mode = self.pending_mode.take().unwrap();
+                    return Some(self.open(mode, (x, y)));
                 }
                 None
             }
@@ -149,7 +155,9 @@ impl Machine {
                 *last = Some(now);
                 if self.down {
                     self.pre_tap = None;
-                    if self.moved {
+                    // Wheel already open: switch mode. The drag image hides over the overlay,
+                    // so the file-drag check only gates the first open.
+                    if self.moved && (self.shown || self.dragging()) {
                         return Some(self.open(mode, cursor));
                     }
                     self.pending_mode = Some(mode);
@@ -174,8 +182,10 @@ impl Machine {
                     if let Some((pre_mode, at)) = self.pre_tap {
                         if pre_mode == mode && now.duration_since(at) < PRE_TAP_WINDOW {
                             self.pre_tap = None;
-                            self.moved = true;
-                            return Some(self.open(mode, cursor));
+                            if self.moved && self.dragging() {
+                                return Some(self.open(mode, cursor));
+                            }
+                            self.pending_mode = Some(mode);
                         }
                     }
                 }
@@ -223,6 +233,10 @@ where
     {
         let mut m = Machine::new();
         m.enabled = enabled;
+        #[cfg(windows)]
+        {
+            m.drag_probe = Some(win::file_drag_active);
+        }
         *MACHINE.lock().unwrap_or_else(|e| e.into_inner()) = Some(m);
     }
     let (tx, rx) = std::sync::mpsc::channel::<HookEvent>();
@@ -250,7 +264,7 @@ mod win {
         VK_CONTROL, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_SHIFT,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
+        CallNextHookEx, DispatchMessageW, FindWindowW, GetCursorPos, IsWindowVisible, GetMessageW, HHOOK, KBDLLHOOKSTRUCT, MSG, MSLLHOOKSTRUCT,
         SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP,
         WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
@@ -262,6 +276,15 @@ mod win {
             if let Some(tx) = TX.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 let _ = tx.send(ev);
             }
+        }
+    }
+
+    /// The shell shows a "SysDragImage" window while files are dragged (Explorer, desktop).
+    pub fn file_drag_active() -> bool {
+        let class: Vec<u16> = "SysDragImage ".encode_utf16().collect();
+        unsafe {
+            let h = FindWindowW(class.as_ptr(), std::ptr::null());
+            !h.is_null() && IsWindowVisible(h) != 0
         }
     }
 
@@ -429,6 +452,28 @@ mod tests {
     }
 
     #[test]
+    fn no_file_drag_no_wheel() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static DRAG: AtomicBool = AtomicBool::new(false);
+        let mut m = Machine::new();
+        m.drag_probe = Some(|| DRAG.load(Ordering::SeqCst));
+        let t = t0();
+        m.handle(Input::MouseDown { x: 0, y: 0 }, t, (0, 0));
+        m.handle(Input::MouseMove { x: 9, y: 0 }, t, (9, 0));
+        // Rubber-band selection / window drag: no file drag, so no wheel.
+        assert_eq!(m.handle(Input::KeyDown(Mode::Convert), t, (9, 0)), None);
+        assert_eq!(m.handle(Input::MouseMove { x: 12, y: 0 }, t, (12, 0)), None);
+        // Once the file drag starts, the pending tap opens the wheel.
+        DRAG.store(true, Ordering::SeqCst);
+        let ev = m.handle(Input::MouseMove { x: 14, y: 0 }, t, (14, 0));
+        assert!(matches!(ev, Some(HookEvent::OpenWheel { fresh: true, .. })), "{ev:?}");
+        // Over the overlay the drag image is hidden; switching mode must still work.
+        DRAG.store(false, Ordering::SeqCst);
+        let ev = m.handle(Input::KeyDown(Mode::Tools), t, (14, 0));
+        assert_eq!(ev, Some(HookEvent::OpenWheel { mode: "tools".into(), x: 14, y: 0, fresh: false }));
+    }
+
+    #[test]
     fn disabled_does_nothing() {
         let mut m = Machine::new();
         m.enabled = false;
@@ -464,6 +509,8 @@ mod tests {
         start_hook(true, move |ev| {
             let _ = tx.send(ev);
         });
+        // Synthesized input drags no file; skip the file-drag check.
+        with_machine(|m| m.drag_probe = None);
         std::thread::sleep(Duration::from_millis(300));
         send(mouse(MOUSEEVENTF_LEFTDOWN, 0, 0));
         send(mouse(MOUSEEVENTF_MOVE, 20, 0));
