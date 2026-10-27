@@ -64,7 +64,6 @@ pub struct Machine {
     pending_mode: Option<Mode>,
     pre_tap: Option<(Mode, Instant)>,
     last_key_down: [Option<Instant>; 3],
-    last_tap: [Option<Instant>; 3],
     key_held: [bool; 3],
     /// Is a file drag (OLE drag-and-drop) in progress? `None` = assume yes (tests, non-Windows).
     pub drag_probe: Option<fn() -> bool>,
@@ -162,15 +161,8 @@ impl Machine {
                     }
                     self.pending_mode = Some(mode);
                 } else {
-                    // Double-tap shortcut to open/preview wheel without dragging
-                    if let Some(t) = self.last_tap[mode.index()] {
-                        if now.duration_since(t) < Duration::from_millis(400) {
-                            self.last_tap[mode.index()] = None;
-                            self.pre_tap = None;
-                            return Some(self.open(mode, cursor));
-                        }
-                    }
-                    self.last_tap[mode.index()] = Some(now);
+                    // No drag yet: remember the tap in case a file drag starts right after.
+                    // The wheel never opens from key taps alone.
                     self.pre_tap = Some((mode, now));
                 }
                 None
@@ -441,14 +433,16 @@ mod tests {
     }
 
     #[test]
-    fn double_tap_without_drag_opens_wheel() {
+    fn key_taps_without_drag_never_open_wheel() {
+        // e.g. Ctrl+C then Ctrl+V, or two capital letters in a row.
         let mut m = Machine::new();
         let t = t0();
-        assert_eq!(m.handle(Input::KeyDown(Mode::Convert), t, (15, 15)), None);
-        assert_eq!(m.handle(Input::KeyUp(Mode::Convert), t + Duration::from_millis(50), (15, 15)), None);
-        let ev = m.handle(Input::KeyDown(Mode::Convert), t + Duration::from_millis(100), (15, 15));
-        assert_eq!(ev, Some(HookEvent::OpenWheel { mode: "convert".into(), x: 15, y: 15, fresh: true }));
-        assert!(m.shown);
+        for i in 0..4u64 {
+            let at = t + Duration::from_millis(i * 60);
+            assert_eq!(m.handle(Input::KeyDown(Mode::Tools), at, (15, 15)), None);
+            assert_eq!(m.handle(Input::KeyUp(Mode::Tools), at + Duration::from_millis(20), (15, 15)), None);
+        }
+        assert!(!m.shown);
     }
 
     #[test]
