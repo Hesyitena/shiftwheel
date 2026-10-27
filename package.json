@@ -2,64 +2,19 @@
   "name": "shiftwheel",
   "version": "1.0.0",
   "description": "Convert files from a radial wheel: drag a file, tap Shift.",
-  "main": "main.js",
   "author": "Shiftwheel",
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "electron .",
-    "dev": "node scripts/dev.js",
-    "predist": "node scripts/make-ico.js",
-    "dist": "electron-builder --win",
-    "install-local": "node scripts/install-local.js",
-    "test": "node test/check.js && node test/hotkeys.test.js && node test/converter.test.js"
-  },
-  "build": {
-    "appId": "com.local.shiftwheel",
-    "productName": "Shiftwheel",
-    "files": [
-      "main.js",
-      "preload.js",
-      "overlay.html",
-      "hud.html",
-      "converter.js",
-      "tools.js",
-      "crop.html",
-      "hotkeys.js",
-      "assets/**"
-    ],
-    "asarUnpack": [
-      "**/node_modules/sharp/**",
-      "**/node_modules/@img/**",
-      "**/node_modules/uiohook-napi/**"
-    ],
-    "compression": "maximum",
-    "electronLanguages": [
-      "en-US"
-    ],
-    "afterPack": "scripts/prune-pack.js",
-    "win": {
-      "target": "nsis",
-      "icon": "build/icon.ico"
-    },
-    "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "runAfterFinish": true,
-      "createStartMenuShortcut": true,
-      "createDesktopShortcut": false,
-      "deleteAppDataOnUninstall": false,
-      "include": "build/installer.nsh"
-    },
-    "npmRebuild": false
-  },
-  "dependencies": {
-    "pdf-lib": "^1.17.1",
-    "sharp": "^0.35.5",
-    "uiohook-napi": "^1.5.5"
+    "start": "tauri dev",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "dist": "tauri build --bundles nsis",
+    "test": "cargo test --workspace --manifest-path src-tauri/Cargo.toml && node tests/ui-e2e.mjs",
+    "test:rust": "cargo test --workspace --manifest-path src-tauri/Cargo.toml",
+    "test:ui": "node tests/ui-e2e.mjs"
   },
   "devDependencies": {
-    "electron": "^45.0.0",
-    "electron-builder": "^26.15.3"
+    "@tauri-apps/cli": "^2.12.4"
   }
 }

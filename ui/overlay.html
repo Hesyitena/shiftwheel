@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' tauri: asset: data:;">
+<title>Shiftwheel</title>
+<link rel="stylesheet" href="theme.css">
+<style>
+  html, body { margin: 0; width: 360px; height: 380px; background: transparent; overflow: hidden; user-select: none; cursor: default; }
+  body { font-family: var(--mono); color: var(--ink); -webkit-font-smoothing: antialiased; }
+  #stage { position: absolute; inset: 0; transform-origin: 180px 180px; }
+  /* Keep alpha >= 5/255 while probing so Windows DWM/WS_EX_LAYERED hit-testing reliably delivers dragenter */
+  #stage.probing { opacity: .03; background: rgba(128, 128, 128, .01); border-radius: 50%; }
+  #stage.pop { animation: pop 120ms ease-out backwards; }
+  #stage.closing { animation: out 100ms ease-in forwards; }
+  @keyframes pop { from { transform: scale(.96); opacity: 0; } }
+  @keyframes out { to { transform: scale(.98); opacity: 0; } }
+
+  svg { position: absolute; left: 0; top: 0; width: 360px; height: 360px; }
+  .disc { fill: var(--black); stroke: var(--line); stroke-width: 1; }
+  #discShadow { position: absolute; left: 34px; top: 34px; width: 292px; height: 292px; border-radius: 50%; box-shadow: 0 18px 50px rgba(0, 0, 0, .55); }
+  .sep { stroke: var(--line-soft); stroke-width: 1; stroke-dasharray: 2 4; }
+  .seg { transform-origin: 180px 180px; transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1); }
+  .seg.hover { transform: scale(1.02); }
+  /* Highlight: fine dots and a red edge */
+  .hl { fill: transparent; }
+  .seg.hover .hl { fill: url(#hot-dots); }
+  .arc { fill: none; stroke: transparent; stroke-width: 3; stroke-linecap: round; }
+  .seg.hover .arc { stroke: var(--red); }
+  text { pointer-events: none; text-anchor: middle; dominant-baseline: central; fill: var(--ink); }
+  .fmt { font-size: 14px; font-weight: 700; letter-spacing: 1px; }
+  .name { font-size: 9.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+  .icon { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  .seg.hover .fmt, .seg.hover .name { fill: var(--red); }
+  .seg.hover .icon { stroke: var(--red); }
+  /* A helper program this slice needs is not installed */
+  .seg.missing .fmt, .seg.missing .name { fill: var(--off); }
+  .seg.missing .icon { stroke: var(--off); }
+  #hole circle { fill: transparent; }
+
+  /* Smooth pointer from center towards highlighted slice */
+  #pointerGroup {
+    pointer-events: none;
+    transform-origin: 180px 180px;
+    opacity: 0;
+    transition: transform 240ms cubic-bezier(0.16, 1, 0.3, 1), opacity 150ms ease;
+    will-change: transform, opacity;
+  }
+  #pointerGroup.active { opacity: 1; }
+  #pointerGroup.active .pointer-arrow { animation: pointerFloat 1200ms infinite alternate ease-in-out; }
+  .pointer-head { fill: var(--ink); }
+  .pointer-dot { fill: var(--off); }
+  @keyframes pointerFloat { from { transform: translateY(0); } to { transform: translateY(-2px); } }
+
+  /* Center: file preview, name, the slice under the cursor */
+  #center {
+    position: absolute; left: 100px; top: 100px; width: 160px; height: 160px; box-sizing: border-box; padding: 8px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none;
+  }
+  #thumbBox {
+    display: none; position: relative; flex-shrink: 0; width: 38px; height: 38px; margin-bottom: 6px; border-radius: 6px;
+    overflow: hidden; background: var(--ground); box-shadow: 0 0 0 1px var(--line); transition: transform 90ms, opacity 90ms;
+  }
+  #thumbImg { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #thumbCount {
+    display: none; position: absolute; right: 2px; bottom: 2px; padding: 0 3px; border-radius: 3px;
+    background: var(--red); color: var(--ink); font-size: 8.5px; font-weight: 700; line-height: 1.35;
+  }
+  #iconBox { display: none; flex-shrink: 0; width: 38px; height: 38px; margin-bottom: 4px; align-items: center; justify-content: center; transition: transform 90ms, opacity 90ms; }
+  #iconBox svg { position: static; width: 28px; height: 28px; fill: none; stroke: var(--sub); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  #fname { max-width: 128px; font-size: 9.5px; letter-spacing: 1.5px; text-transform: uppercase; color: #8a8a8a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #fname:empty { display: none; }
+  #title { max-width: 140px; margin-top: 2px; font-family: var(--dot-font); font-size: 30px; font-weight: 900; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #center.long #title { font-size: 22px; }
+  #center.xlong #title { font-size: 16px; line-height: 1.1; white-space: normal; }
+  #desc { max-width: 132px; margin-top: 5px; font-size: 10px; line-height: 1.35; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #desc:empty { display: none; }
+  #center.idle #title { font-family: var(--mono); font-size: 12px; font-weight: 400; line-height: 1.35; color: var(--sub); white-space: normal; }
+  #center.cancel #title, #center.cancel #desc { color: var(--red); }
+  #center.cancel #thumbBox, #center.cancel #iconBox { opacity: .45; transform: scale(.94); }
+  #center.missing #title { color: var(--off); }
+  #center.missing #desc { color: var(--red-soft); }
+  .ptr { display: inline-block; margin-right: 4px; color: var(--red); animation: nudge 450ms infinite alternate ease-in-out; }
+  @keyframes nudge { to { transform: translateX(3px); } }
+
+  #modes {
+    position: absolute; top: 344px; left: 50%; transform: translateX(-50%); display: flex; gap: 14px; padding: 6px 14px;
+    background: rgba(0, 0, 0, .92); border-radius: 999px; box-shadow: inset 0 0 0 1px var(--line); white-space: nowrap;
+  }
+  .mode { display: flex; align-items: center; gap: 6px; font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--mute); }
+  .mode::before { content: ""; width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--mute); }
+  .mode.on { color: var(--ink); }
+  .mode.on::before { background: var(--red); box-shadow: none; }
+  .mode kbd { font: inherit; margin-right: 2px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #stage.pop, #stage.closing { animation: none; }
+    .seg, #pointerGroup { transition: none; }
+    #pointerGroup.active .pointer-arrow, .ptr { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="discShadow"></div>
+  <svg viewBox="0 0 360 360" aria-label="Shiftwheel">
+    <defs>
+      <pattern id="hot-dots" width="5" height="5" patternUnits="userSpaceOnUse"><circle cx="2.5" cy="2.5" r="1" fill="#4a4a4a"/></pattern>
+    </defs>
+    <circle class="disc" cx="180" cy="180" r="146"/>
+    <g id="segs"></g>
+    <circle class="disc" cx="180" cy="180" r="80"/>
+    <g id="pointerGroup">
+      <g class="pointer-arrow">
+        <path d="M 180 88 L 173 100 L 180 97 L 187 100 Z" class="pointer-head" />
+        <circle cx="180" cy="103" r="2.2" class="pointer-dot" />
+      </g>
+    </g>
+    <g id="hole"><circle cx="180" cy="180" r="80"/></g>
+  </svg>
+  <div id="center" class="idle">
+    <div id="thumbBox"><img id="thumbImg" alt="" /><span id="thumbCount"></span></div>
+    <div id="iconBox"><svg viewBox="0 0 24 24"><path id="iconPath" /></svg></div>
+    <div id="fname"></div>
+    <div id="title"></div>
+    <div id="desc"></div>
+  </div>
+  <div id="modes">
+    <div class="mode" data-mode="convert"><kbd>⇧</kbd>Convert</div>
+    <div class="mode" data-mode="tools"><kbd>Ctrl</kbd>Tools</div>
+    <div class="mode" data-mode="actions"><kbd>Alt</kbd>Actions</div>
+  </div>
+</div>
+<script src="bridge.js"></script>
+<script>
+  // Radial wheel. The backend sends the slices and handles the drop.
+  const NS = 'http://www.w3.org/2000/svg';
+  const C = 180, R = 146, r = 80, INSET = 6;
+  // [singular, plural] for the center text, e.g. "1 image", "2 images"
+  const KIND = {
+    image: ['image', 'images'], pdf: ['PDF', 'PDFs'], document: ['document', 'documents'], sheet: ['spreadsheet', 'spreadsheets'],
+    slides: ['presentation', 'presentations'], audio: ['audio file', 'audio files'], video: ['video', 'videos'],
+    text: ['text file', 'text files'], folder: ['folder', 'folders'], unknown: ['file', 'files'],
+  };
+
+  const CAT_ICONS = {
+    pdf: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M9 15h6 M9 18h6',
+    document: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6 M8 13h8 M8 17h8',
+    sheet: 'M3 3h18v18H3z M3 9h18 M3 15h18 M9 3v18 M15 3v18',
+    slides: 'M2 4h20v13H2z M8 21h8 M12 17v4',
+    audio: 'M9 18V5l12-2v13 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0zm12-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0z',
+    video: 'M2 5h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2z M18 10l5-3v10l-5-3v-4z',
+    image: 'M3 3h18v18H3z M3 16l5-5 4 4 3-3 6 6 M8 8.5a1.5 1.5 0 1 1 0-3 1.5 1.5 0 0 1 0 3z',
+    folder: 'M2 4a2 2 0 0 1 2-2h5l2 2h9a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V4z',
+    unknown: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2v6h6'
+  };
+  // 24×24 line icons for the tools and actions wheels
+  const ICONS = {
+    compress: 'M4 14h6v6M20 10h-6V4M14 10l6-6M4 20l6-6',
+    half: 'M4 4h16v16H4zM4 12h8v8',
+    rotate: 'M20 12a8 8 0 1 1-2.6-5.9M20 4v5h-5',
+    gray: 'M12 3a9 9 0 1 0 0 18a9 9 0 1 0 0-18zM12 3v18M12 8h7M12 12h9M12 16h7',
+    strip: 'M3 12V4h8l9 9-8 8zM7.5 7.5h.01M3 21L21 3',
+    merge: 'M6 3v5a6 6 0 0 0 6 6v7M18 3v5a6 6 0 0 1-6 6',
+    split: 'M12 3v7M12 10l-6 6v5M12 10l6 6v5',
+    screen: 'M3 5h18v12H3zM8 21h8M12 17v4',
+    mute: 'M4 9h4l5-4v14l-5-4H4zM17 9l5 6M22 9l-5 6',
+    wave: 'M3 12h2M7 8v8M11 5v14M15 8v8M19 10v4',
+    mono: 'M4 9h4l5-4v14l-5-4H4zM17 12h4',
+    link: 'M10 14l4-4M11 7l1.5-1.5a4 4 0 0 1 5.7 5.7L16.5 13M13 17l-1.5 1.5a4 4 0 0 1-5.7-5.7L7.5 11',
+    copy: 'M8 8h12v12H8zM4 16V4h12',
+    'copy-to': 'M3 6h6l2 2h10v11H3zM12 11v6M9 14h6',
+    'move-to': 'M3 6h6l2 2h10v11H3zM8 14h7M12 11l3 3-3 3',
+    terminal: 'M3 5h18v14H3zM7 10l3 2-3 2M12 15h4',
+    folder: 'M3 6h6l2 2h10v11H3zM3 11h18',
+    flip: 'M12 3v18M9 7l-6 5 6 5zM15 7l6 5-6 5z',
+    crop: 'M6 2v16h16M2 6h16v16',
+    fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5M9 9h6v6H9z',
+    square: 'M4 4h16v16H4zM9 9h6v6H9z',
+    hash: 'M5 9h14M5 15h14M10 4L8 20M16 4l-2 16',
+    reverse: 'M7 20V4M4 7l3-3 3 3M17 4v16M14 17l3 3 3-3',
+    image: 'M3 5h18v14H3zM3 16l5-5 4 4 3-3 6 6M15.5 9h.01',
+    fast: 'M3 6l8 6-8 6zM12 6l8 6-8 6z',
+    denoise: 'M3 12c1.5-4 3-4 4.5 0s3 4 4.5 0 3-4 4.5 0 3 4 4.5 0',
+    scissors: 'M8.5 6a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M8.5 18a2.5 2.5 0 1 1-5 0a2.5 2.5 0 1 1 5 0M8 7.5L20 17M8 16.5L20 7',
+    fade: 'M3 19L9 5h6l6 14',
+  };
+
+  // ---------- Sound: synthesized with WebAudio, short ----------
+  // Tones >= 500 Hz so they come through laptop speakers; each tone gets an octave harmonic for presence.
+  // A limiter at the end keeps overlapping sounds from clipping.
+  const sound = { on: true, ctx: null, out: null, last: 0, close: 0 };
+  function audio() {
+    if (!sound.ctx) {
+      sound.ctx = new AudioContext();
+      const comp = sound.ctx.createDynamicsCompressor();
+      // Limiter: only kicks in near 0 dB, so normal levels are left alone
+      comp.threshold.value = -2;
+      comp.knee.value = 0;
+      comp.ratio.value = 20;
+      comp.attack.value = 0.001;
+      comp.release.value = 0.05;
+      sound.out = sound.ctx.createGain();
+      sound.out.gain.value = 0.38;
+      sound.out.connect(comp).connect(sound.ctx.destination);
+    }
+    // A live AudioContext burns CPU constantly, so it closes after 1.5 s of silence.
+    // Close rather than suspend on purpose: on Windows, resume gets slower the longer it slept
+    // (12 s idle -> ~440 ms), while creating a new one is a steady ~25-55 ms.
+    clearTimeout(sound.close);
+    sound.close = setTimeout(() => { if (sound.ctx) sound.ctx.close(); sound.ctx = null; }, 1500);
+    return sound.ctx;
+  }
+  function tone(notes, { dur = 0.06, gain = 0.32, type = 'sine', step = 0.6, bright = 0.22 } = {}) {
+    if (!sound.on) return;
+    const ctx = audio();
+    let t = ctx.currentTime + 0.005;
+    for (const note of notes) {
+      const [from, to] = Array.isArray(note) ? note : [note, note];
+      const amp = ctx.createGain();
+      amp.gain.setValueAtTime(0.0001, t);
+      // Fast attack, hold for ~40% of the duration, then decay: short sounds stay clearly audible
+      amp.gain.exponentialRampToValueAtTime(gain, t + 0.003);
+      amp.gain.setValueAtTime(gain, t + dur * 0.4);
+      amp.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      amp.connect(sound.out);
+      for (const [mult, level] of [[1, 1], [2, bright]]) {
+        if (!level) continue;
+        const osc = ctx.createOscillator();
+        const mix = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(from * mult, t);
+        if (to !== from) osc.frequency.exponentialRampToValueAtTime(to * mult, t + dur);
+        mix.gain.value = level;
+        osc.connect(mix).connect(amp);
+        osc.start(t);
+        osc.stop(t + dur + 0.02);
+      }
+      t += dur * step;
+    }
+  }
+  const SOUNDS = {
+    open: () => tone([[620, 940]], { dur: 0.075, gain: 0.20 }),
+    close: () => tone([[840, 540]], { dur: 0.08, gain: 0.18 }),
+    tick: () => tone([[1500, 1150]], { dur: 0.03, gain: 0.14, type: 'triangle', bright: 0.10 }), // subtle soft tick
+    switch: () => tone([1050, 1400], { dur: 0.04, gain: 0.18, type: 'triangle', step: 0.85 }),
+    select: () => tone([880, 1320], { dur: 0.085, gain: 0.22 }),
+    cancel: () => tone([[760, 470]], { dur: 0.10, gain: 0.18, type: 'triangle' }),
+    done: () => tone([784, 1175, 1568], { dur: 0.18, gain: 0.20, step: 0.42 }),
+    error: () => tone([523, 392], { dur: 0.14, gain: 0.22, type: 'triangle', step: 0.9 }),
+  };
+  function play(name) {
+    // Rate-limit hover ticks so sweeping across many segments doesn't get noisy
+    if (name === 'tick') { if (performance.now() - sound.last < 45) return; sound.last = performance.now(); }
+    if (SOUNDS[name]) SOUNDS[name]();
+  }
+
+  // ---------- Wheel ----------
+  // The backend decides which slices a selection gets (and resolves the drop with the same
+  // list and geometry), so this page only draws `state.items` and tracks the hover.
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage'), segs = $('segs'), hole = $('hole'), center = $('center'), title = $('title'), desc = $('desc'), fname = $('fname');
+  const NEEDS = { ffmpeg: 'FFmpeg', libreoffice: 'LibreOffice', poppler: 'Poppler' };
+  const state = { mode: 'convert', category: null, count: 0, items: null, thumb: null, file_name: null };
+  let hover = null; // highlighted segment, or the center hole (cancel)
+  let dropped = false;
+  let pointerRot = 0;
+  let revealed = false; // stays invisible until the backend reports a file drag over the wheel
+
+  function el(tag, attrs, text) {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+    if (text) node.textContent = text;
+    return node;
+  }
+
+  const point = (rad, deg) => [C + rad * Math.cos(deg * Math.PI / 180), C + rad * Math.sin(deg * Math.PI / 180)];
+  const fmt = (p) => p.map((v) => v.toFixed(1)).join(' ');
+  const kind = (n) => (KIND[state.category] || KIND.unknown)[n === 1 ? 0 : 1];
+
+  // Highlight: a ring sector inset INSET px from the edges, corners rounded by a thick stroke
+  function sectorPath(a1, a2) {
+    const ro = R - INSET, ri = r + INSET, d = INSET / 2 + 1;
+    const off = (rad) => Math.asin(Math.min(1, d / rad)) * 180 / Math.PI;
+    const o1 = a1 + off(ro), o2 = a2 - off(ro), i1 = a1 + off(ri), i2 = a2 - off(ri);
+    return `M${fmt(point(ro, o1))}A${ro} ${ro} 0 ${o2 - o1 > 180 ? 1 : 0} 1 ${fmt(point(ro, o2))}` +
+      `L${fmt(point(ri, i2))}A${ri} ${ri} 0 ${i2 - i1 > 180 ? 1 : 0} 0 ${fmt(point(ri, i1))}Z`;
+  }
+
+  function emptyText() {
+    if (!state.items || state.items.length) return '';
+    if (state.mode === 'tools') return `No tools for ${kind(2)} yet`;
+    if (state.mode === 'convert') return state.category === 'folder' ? 'Folders can’t be converted' : 'Can’t convert this file type';
+    return 'Nothing here yet';
+  }
+
+  function paintCenter() {
+    const empty = emptyText();
+    const thumbBox = $('thumbBox');
+    const thumbImg = $('thumbImg');
+    const thumbCount = $('thumbCount');
+    const iconBox = $('iconBox');
+    const iconPath = $('iconPath');
+
+    const hasFile = Boolean(state.thumb || state.file_name || state.category);
+    const n = state.count || 1;
+
+    // 1. Maintain file visual (thumbnail or category icon)
+    if (state.thumb && thumbBox && thumbImg) {
+      if (thumbImg.src !== state.thumb) thumbImg.src = state.thumb;
+      thumbBox.style.display = 'block';
+      if (iconBox) iconBox.style.display = 'none';
+      if (thumbCount) {
+        if (n > 1) {
+          thumbCount.textContent = `+${n - 1}`;
+          thumbCount.style.display = 'block';
+        } else {
+          thumbCount.style.display = 'none';
+        }
+      }
+    } else if (state.category && iconBox && iconPath) {
+      const catPath = CAT_ICONS[state.category] || CAT_ICONS.unknown;
+      iconPath.setAttribute('d', catPath);
+      iconBox.style.display = 'flex';
+      if (thumbBox) thumbBox.style.display = 'none';
+    } else if (iconBox && iconPath) {
+      iconPath.setAttribute('d', CAT_ICONS.unknown);
+      iconBox.style.display = 'flex';
+      if (thumbBox) thumbBox.style.display = 'none';
+    }
+
+    // 2. Pointer towards the highlighted slice (shortest-path smooth rotation)
+    const pointerGroup = $('pointerGroup');
+    const onSlice = hover && hover !== hole;
+    if (onSlice && hover.dataset.mid !== undefined) {
+      const targetRot = parseFloat(hover.dataset.mid) + 90;
+      let diff = (targetRot - (pointerRot % 360) + 540) % 360 - 180;
+      pointerRot += diff;
+      pointerGroup.style.transform = `rotate(${pointerRot}deg)`;
+      pointerGroup.classList.add('active');
+    } else {
+      pointerGroup.classList.remove('active');
+    }
+
+    // 3. Text: file name, then the slice (or what the drop does)
+    const needs = onSlice ? hover.dataset.needs : '';
+    let t = '', d = '';
+    if (hover === hole) { t = 'Cancel'; d = 'Drop here'; }
+    else if (onSlice) { t = hover.dataset.label; d = needs ? `Needs ${NEEDS[needs] || needs}` : hover.dataset.caption || ''; }
+    else if (empty) t = empty;
+    else if (hasFile) { t = `${n} ${kind(n)}`; d = 'Drop on a slice'; }
+    else t = 'Drop on a slice';
+    center.classList.toggle('idle', !hover);
+    center.classList.toggle('cancel', hover === hole);
+    center.classList.toggle('missing', Boolean(needs));
+    center.classList.toggle('long', Boolean(hover) && t.length > 5 && t.length <= 9);
+    center.classList.toggle('xlong', Boolean(hover) && t.length > 9);
+    // The thumbnail carries its own "+N" badge
+    const more = n > 1 && !state.thumb ? ` +${n - 1}` : '';
+    fname.textContent = state.file_name ? state.file_name + more : '';
+    title.textContent = t;
+    desc.textContent = d === t ? '' : d;
+    if (onSlice && d && !needs) {
+      const ptr = document.createElement('span');
+      ptr.className = 'ptr';
+      ptr.textContent = '→';
+      desc.prepend(ptr);
+    }
+  }
+
+  // The red edge on the highlighted slice
+  function arcPath(a1, a2) {
+    const ra = R - 5, b1 = a1 + 4, b2 = a2 - 4;
+    return `M${fmt(point(ra, b1))}A${ra} ${ra} 0 ${b2 - b1 > 180 ? 1 : 0} 1 ${fmt(point(ra, b2))}`;
+  }
+
+  function setHover(target) {
+    if (target === hover) return;
+    if (hover && hover !== hole) hover.classList.remove('hover');
+    hover = target;
+    if (hover && hover !== hole) {
+      hover.classList.add('hover');
+      play('tick');
+    }
+    document.body.dataset.pick = hover && hover !== hole ? hover.dataset.id : '';
+    paintCenter();
+  }
+
+  function render() {
+    hover = null;
+    document.body.dataset.pick = '';
+    segs.replaceChildren();
+    for (const m of document.querySelectorAll('.mode')) m.classList.toggle('on', m.dataset.mode === state.mode);
+    const list = state.items || [];
+    const step = 360 / list.length;
+    list.forEach((item, i) => {
+      const mid = -90 + i * step;
+      const a1 = mid - step / 2;
+      const g = el('g', {
+        class: item.needs ? 'seg missing' : 'seg', 'data-id': item.id, 'data-label': item.label,
+        'data-caption': item.caption || '', 'data-needs': item.needs || '', 'data-mid': mid,
+      });
+      // Hit area = the full sector (transparent); highlight = the inset sector filled with fine dots
+      g.append(el('path', { d: sectorPath(a1, mid + step / 2), class: 'hl' }));
+      g.append(el('path', { d: arcPath(a1, mid + step / 2), class: 'arc' }));
+      if (list.length > 1) segs.append(el('line', { class: 'sep', x1: point(r, a1)[0], y1: point(r, a1)[1], x2: point(R, a1)[0], y2: point(R, a1)[1] }));
+      const [x, y] = point((R + r) / 2, mid);
+      if (ICONS[item.icon]) {
+        // Long labels wrap onto two lines so they fit on wheels with many segments
+        const words = item.label.split(' ');
+        const lines = item.label.length > 9 && words.length > 1 ? [words[0], words.slice(1).join(' ')] : [item.label];
+        const lift = (lines.length - 1) * 6;
+        g.append(el('path', { class: 'icon', d: ICONS[item.icon], transform: `translate(${(x - 9).toFixed(1)} ${(y - 17 - lift).toFixed(1)}) scale(.75)` }));
+        const text = el('text', { class: 'name', x, y: y + 11 - lift });
+        lines.forEach((line, j) => text.append(el('tspan', { x, dy: j ? 12 : 0 }, line)));
+        g.append(text);
+      } else {
+        g.append(el('text', { class: 'fmt', x, y }, item.label));
+      }
+      segs.append(g);
+    });
+    paintCenter();
+  }
+
+  function revealWheel() {
+    if (revealed) return;
+    revealed = true;
+    stage.classList.remove('probing', 'pop');
+    void stage.offsetWidth; // restart the animation
+    stage.classList.add('pop');
+    play('open');
+    window.shiftwheel.revealed(true);
+  }
+
+  // Same geometry as the backend (wheel.rs): the whole sector is the hit area
+  function segmentAt(x, y) {
+    const dist = Math.hypot(x - C, y - C);
+    if (dist < r) return hole;
+    const list = segs.querySelectorAll('.seg');
+    if (dist > R + 20 || !list.length) return null;
+    const step = 360 / list.length;
+    const angle = (Math.atan2(y - C, x - C) * 180 / Math.PI + 90 + step / 2 + 360) % 360;
+    return list[Math.floor(angle / step) % list.length] || null;
+  }
+
+  const hasPoint = (p) => p && typeof p.x === 'number' && typeof p.y === 'number';
+
+  // Native drag-and-drop events from the backend (only sent for file drags)
+  window.shiftwheel.onDragEnter((p) => {
+    if (!p) return;
+    state.category = p.category || 'unknown';
+    state.count = p.count || 1;
+    state.file_name = p.file_name || null;
+    state.thumb = p.thumb || null;
+    // An empty list is an answer too (a type with nothing to convert to)
+    if (Array.isArray(p.items)) state.items = p.items;
+    render();
+    revealWheel();
+    if (hasPoint(p)) setHover(segmentAt(p.x, p.y));
+  });
+
+  window.shiftwheel.onDragOver((p) => {
+    if (!revealed) revealWheel();
+    if (hasPoint(p)) setHover(segmentAt(p.x, p.y));
+  });
+
+  window.shiftwheel.onDragLeave(() => setHover(null));
+
+  // The backend plays the select/cancel sound and runs the job
+  window.shiftwheel.onDragDrop(() => { dropped = true; setHover(null); });
+
+  window.shiftwheel.onSettings((s) => { sound.on = Boolean(s && s.sound); });
+  window.shiftwheel.onSound(play);
+  window.shiftwheel.getSettings().then((s) => { sound.on = Boolean(s && s.sound); }).catch(() => {});
+
+  window.shiftwheel.onShow((p) => {
+    state.mode = p.mode;
+    dropped = false;
+    stage.classList.remove('closing');
+    if (Array.isArray(p.items)) state.items = p.items;
+    if (p.file_name) state.file_name = p.file_name;
+    if (p.thumb) state.thumb = p.thumb;
+    if (p.category) state.category = p.category;
+    if (Array.isArray(p.paths) && p.paths.length) state.count = p.paths.length;
+    else if (p.count) state.count = p.count;
+
+    if (p.fresh) {
+      revealed = false;
+      if (!p.category) state.category = null;
+      if (!p.thumb) state.thumb = null;
+      if (!p.file_name) state.file_name = null;
+      if (!(Array.isArray(p.paths) && p.paths.length) && !p.count) state.count = 0;
+      render();
+      revealWheel();
+      return;
+    }
+    // Switching wheels mid-drag keeps the files; the backend sends the new list.
+    if (revealed) play('switch');
+    render();
+  });
+
+  function categoryOf(types, name) {
+    if (name) {
+      const ext = name.split('.').pop().toLowerCase();
+      if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tiff', 'avif', 'svg', 'heic', 'ico'].includes(ext)) return 'image';
+      if (ext === 'pdf') return 'pdf';
+      if (['doc', 'docx', 'odt', 'rtf', 'txt', 'html', 'md'].includes(ext)) return 'document';
+      if (['xls', 'xlsx', 'ods', 'csv'].includes(ext)) return 'sheet';
+      if (['ppt', 'pptx', 'odp'].includes(ext)) return 'slides';
+      if (['mp3', 'm4a', 'wav', 'flac', 'ogg', 'opus', 'aiff', 'aac'].includes(ext)) return 'audio';
+      if (['mp4', 'mov', 'mkv', 'webm', 'avi', 'wmv'].includes(ext)) return 'video';
+    }
+    const t = (Array.isArray(types) ? types : []).find((x) => x && x.includes('/')) || '';
+    if (t === 'application/pdf') return 'pdf';
+    if (t.startsWith('image/')) return 'image';
+    if (t.startsWith('audio/')) return 'audio';
+    if (t.startsWith('video/')) return 'video';
+    if (/spreadsheet|excel|csv/.test(t)) return 'sheet';
+    if (/presentation|powerpoint/.test(t)) return 'slides';
+    if (/word|opendocument\.text|rtf|^text\//.test(t)) return 'document';
+    return 'unknown';
+  }
+
+  function onFileDrag(e) {
+    const types = e.dataTransfer ? [...e.dataTransfer.types] : [];
+    if (!types.includes('Files')) return;
+
+    if (!state.thumb || !state.file_name || !state.category) {
+      const items = [...(e.dataTransfer.items || [])].filter((i) => i.kind === 'file');
+      const files = [...(e.dataTransfer.files || [])];
+      state.count = items.length || files.length || state.count || 1;
+
+      let firstFile = files[0] || (items[0] && typeof items[0].getAsFile === 'function' ? items[0].getAsFile() : null);
+      if (firstFile) {
+        state.file_name = firstFile.name;
+        state.category = categoryOf(items.map((i) => i.type), firstFile.name);
+        if (firstFile.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|ico)$/i.test(firstFile.name)) {
+          try {
+            state.thumb = URL.createObjectURL(firstFile);
+          } catch (_) {}
+        }
+      } else if (items.length > 0) {
+        state.category = categoryOf(items.map((i) => i.type), null);
+      }
+      paintCenter();
+    }
+
+    if (!revealed) revealWheel();
+    setHover(segmentAt(e.clientX, e.clientY));
+  }
+
+  document.addEventListener('dragenter', onFileDrag);
+  document.addEventListener('dragover', onFileDrag);
+  document.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget) setHover(null);
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!revealed) return;
+    setHover(segmentAt(e.clientX, e.clientY));
+  });
+
+    window.shiftwheel.onClose(() => {
+    if (!revealed) return;
+    if (!dropped) play('close');
+    stage.classList.add('closing');
+  });
+</script>
+</body>
+</html>

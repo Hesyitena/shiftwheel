@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' tauri: asset: data:;">
+<title>Crop</title>
+<link rel="stylesheet" href="theme.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--ground); color: var(--ink); overflow: hidden; user-select: none; }
+  body { display: flex; flex-direction: column; font-family: var(--mono); font-size: 12px; -webkit-font-smoothing: antialiased; box-shadow: inset 0 0 0 1px var(--line); }
+
+  /* Custom title bar: drag to move; our own minimize/close (close = cancel) */
+  header { height: 52px; flex: none; display: flex; align-items: center; gap: 14px; padding-left: 20px; }
+  header .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+  header .brand { font-family: var(--dot-font); font-size: 22px; font-weight: 900; letter-spacing: 1px; }
+  #name { max-width: 380px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #count { font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--mute); white-space: nowrap; }
+  .win { margin-left: auto; display: flex; align-self: stretch; }
+  .win button { width: 46px; border: 0; background: transparent; color: var(--sub); display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .win button:hover { background: #1c1c1c; color: var(--ink); }
+  #close:hover { background: var(--red); color: var(--ink); }
+  .win svg { width: 10px; height: 10px; stroke: currentColor; }
+
+  #work { flex: 1; min-height: 0; display: flex; }
+  aside { width: 132px; flex: none; padding: 8px 12px 0 20px; display: flex; flex-direction: column; gap: 4px; }
+  .label { margin-bottom: 6px; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase; color: var(--mute); }
+  #ratios { display: flex; flex-direction: column; gap: 4px; }
+  .ratio { border: 0; padding: 7px 10px; border-radius: 8px; background: transparent; text-align: left; font: inherit; font-size: 12px; color: var(--sub); cursor: pointer; }
+  .ratio:hover { color: var(--ink); background: #161616; }
+  .ratio.on { background: var(--ink); color: var(--ground); font-weight: 700; }
+
+  main { flex: 1; position: relative; min-height: 0; margin: 0 20px 0 0; border-radius: 10px; background-color: var(--ground); background-image: radial-gradient(#1f1f1f 1px, transparent 1.3px); background-size: 16px 16px; }
+  #frame { position: absolute; touch-action: none; cursor: crosshair; }
+  #frame img { display: block; width: 100%; height: 100%; pointer-events: none; }
+  /* The huge shadow darkens everything outside the selection; #clip keeps it inside the image.
+     The box and its handles live outside #clip, so handles on the image edge stay fully grabbable. */
+  #clip { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+  #shade { position: absolute; box-shadow: 0 0 0 9999px rgba(0, 0, 0, .72); }
+  #box { position: absolute; outline: 1px dashed var(--ink); cursor: move; }
+  .third { position: absolute; background: rgba(242, 242, 242, .22); pointer-events: none; }
+  .third.v { top: 0; bottom: 0; width: 1px; }
+  .third.h { left: 0; right: 0; height: 1px; }
+  .handle { position: absolute; width: 10px; height: 10px; margin: -5px 0 0 -5px; background: var(--ink); }
+  .handle:not(.edge) { background: var(--red); }
+  .handle[data-h="nw"], .handle[data-h="se"] { cursor: nwse-resize; }
+  .handle[data-h="ne"], .handle[data-h="sw"] { cursor: nesw-resize; }
+  .handle[data-h="n"], .handle[data-h="s"] { cursor: ns-resize; }
+  .handle[data-h="e"], .handle[data-h="w"] { cursor: ew-resize; }
+  body.locked .handle.edge { display: none; }
+
+  footer { height: 68px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 20px; }
+  #size { font-family: var(--dot-font); font-size: 22px; font-weight: 900; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #hint { font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase; color: var(--mute); }
+  .spacer { flex: 1; }
+  button.act { border: 0; padding: 11px 18px; border-radius: 999px; font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; cursor: pointer; }
+  #cancel { background: transparent; color: var(--ink); box-shadow: inset 0 0 0 1px #3a3a3a; }
+  #save { background: var(--ink); color: var(--ground); display: flex; align-items: center; gap: 8px; }
+  #save::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--red); }
+  button:focus-visible { outline: 2px solid var(--red); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<header data-tauri-drag-region>
+  <span class="dot" data-tauri-drag-region></span><span class="brand" data-tauri-drag-region>CROP</span>
+  <span id="name" data-tauri-drag-region></span><span id="count" data-tauri-drag-region></span>
+  <div class="win">
+    <button id="min" type="button" aria-label="Minimize"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10"/></svg></button>
+    <button id="close" type="button" aria-label="Cancel and close"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10"/></svg></button>
+  </div>
+</header>
+<div id="work">
+  <aside>
+    <div class="label">Ratio</div>
+    <div id="ratios" role="group" aria-label="Aspect ratio">
+      <button class="ratio on" data-r="0">Free</button>
+      <button class="ratio" data-r="1">1:1</button>
+      <button class="ratio" data-r="1.3333">4:3</button>
+      <button class="ratio" data-r="1.5">3:2</button>
+      <button class="ratio" data-r="1.7778">16:9</button>
+      <button class="ratio" data-r="0.5625">9:16</button>
+    </div>
+  </aside>
+  <main>
+    <div id="frame">
+      <img id="img" alt="">
+      <div id="clip"><div id="shade"></div></div>
+      <div id="box"></div>
+    </div>
+  </main>
+</div>
+<footer>
+  <span id="size"></span>
+  <span id="hint">drag select · enter crop · esc cancel</span>
+  <span class="spacer"></span>
+  <button class="act" id="cancel">Cancel</button>
+  <button class="act" id="save">Crop</button>
+</footer>
+<script src="bridge.js"></script>
+<script>
+  // Crop editor. The selection is kept normalized (0..1 of the image) so the backend can apply
+  // it to the full-size originals, and to several images at once.
+  const $ = (id) => document.getElementById(id);
+  const frame = $('frame'), box = $('box'), img = $('img');
+  const MIN = 0.02; // smallest selection, as a fraction of the image
+  let W = 1, H = 1; // full-size pixels (after EXIF orientation)
+  let ratio = 0; // width / height in pixels; 0 = free
+  let rect = { x: 0, y: 0, w: 1, h: 1 };
+  let drag = null;
+
+  // Build the thirds grid and the 8 handles
+  box.replaceChildren();
+  for (const [cls, pos] of [['v', 33.333], ['v', 66.667], ['h', 33.333], ['h', 66.667]]) {
+    const d = document.createElement('div');
+    d.className = `third ${cls}`;
+    d.style[cls === 'v' ? 'left' : 'top'] = `${pos}%`;
+    box.append(d);
+  }
+  const HANDLES = { nw: [0, 0], n: [50, 0], ne: [100, 0], e: [100, 50], se: [100, 100], s: [50, 100], sw: [0, 100], w: [0, 50] };
+  for (const [h, [x, y]] of Object.entries(HANDLES)) {
+    const d = document.createElement('div');
+    d.className = `handle${h.length === 1 ? ' edge' : ''}`;
+    d.dataset.h = h;
+    d.style.left = `${x}%`;
+    d.style.top = `${y}%`;
+    box.append(d);
+  }
+
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+  // Fit the image into the stage, keeping its aspect ratio
+  function layout() {
+    const stage = frame.parentElement.getBoundingClientRect();
+    const pad = 24;
+    const scale = Math.min((stage.width - pad * 2) / W, (stage.height - pad * 2) / H);
+    const w = Math.max(1, W * scale), h = Math.max(1, H * scale);
+    Object.assign(frame.style, { width: `${w}px`, height: `${h}px`, left: `${(stage.width - w) / 2}px`, top: `${(stage.height - h) / 2}px` });
+  }
+
+  function paint() {
+    const pos = { left: `${rect.x * 100}%`, top: `${rect.y * 100}%`, width: `${rect.w * 100}%`, height: `${rect.h * 100}%` };
+    Object.assign(box.style, pos);
+    Object.assign($('shade').style, pos);
+    $('size').textContent = `${Math.round(rect.w * W)} × ${Math.round(rect.h * H)} px`;
+  }
+
+  // Largest centered selection with the chosen ratio
+  function applyRatio(r) {
+    ratio = r;
+    document.body.classList.toggle('locked', r > 0);
+    for (const b of document.querySelectorAll('.ratio')) b.classList.toggle('on', Number(b.dataset.r) === r);
+    if (r > 0) {
+      let w = 1, h = (W / r) / H;
+      if (h > 1) { h = 1; w = (H * r) / W; }
+      rect = { x: (1 - w) / 2, y: (1 - h) / 2, w, h };
+    }
+    paint();
+  }
+
+  const toNorm = (e) => {
+    const b = frame.getBoundingClientRect();
+    return { x: clamp((e.clientX - b.left) / b.width, 0, 1), y: clamp((e.clientY - b.top) / b.height, 0, 1) };
+  };
+
+  // Resize from a fixed anchor corner toward the pointer, honoring the ratio when one is set
+  function fromAnchor(ax, ay, p) {
+    let w = Math.max(MIN, Math.abs(p.x - ax));
+    let h = Math.max(MIN, Math.abs(p.y - ay));
+    const room = { w: p.x < ax ? ax : 1 - ax, h: p.y < ay ? ay : 1 - ay };
+    if (ratio > 0) {
+      h = (w * W) / (ratio * H);
+      if (h > room.h) { h = room.h; w = (h * H * ratio) / W; }
+    }
+    w = Math.min(w, room.w);
+    h = Math.min(h, room.h);
+    return { x: p.x < ax ? ax - w : ax, y: p.y < ay ? ay - h : ay, w, h };
+  }
+
+  frame.addEventListener('pointerdown', (e) => {
+    frame.setPointerCapture(e.pointerId);
+    const p = toNorm(e);
+    const handle = e.target.dataset && e.target.dataset.h;
+    if (handle) drag = { kind: 'resize', handle, start: { ...rect } };
+    // Inside the selection moves it, unless it still covers the whole image: then a drag draws
+    // a new one (otherwise "drag to select" would do nothing on a fresh image).
+    else if ((e.target === box || box.contains(e.target)) && !(rect.w > 0.999 && rect.h > 0.999)) drag = { kind: 'move', p0: p, start: { ...rect } };
+    else drag = { kind: 'draw', ax: p.x, ay: p.y }; // start a new selection
+  });
+
+  frame.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const p = toNorm(e);
+    const s = drag.start;
+    if (drag.kind === 'move') {
+      rect = { ...s, x: clamp(s.x + p.x - drag.p0.x, 0, 1 - s.w), y: clamp(s.y + p.y - drag.p0.y, 0, 1 - s.h) };
+    } else if (drag.kind === 'draw') {
+      rect = fromAnchor(drag.ax, drag.ay, p);
+    } else if (drag.handle.length === 2) {
+      // Corner: the opposite corner stays put
+      const ax = drag.handle.includes('w') ? s.x + s.w : s.x;
+      const ay = drag.handle.includes('n') ? s.y + s.h : s.y;
+      rect = fromAnchor(ax, ay, p);
+    } else {
+      // Edge (free ratio only): move just that side
+      const r = { ...s };
+      if (drag.handle === 'n') { r.y = clamp(p.y, 0, s.y + s.h - MIN); r.h = s.y + s.h - r.y; }
+      if (drag.handle === 's') r.h = clamp(p.y - s.y, MIN, 1 - s.y);
+      if (drag.handle === 'w') { r.x = clamp(p.x, 0, s.x + s.w - MIN); r.w = s.x + s.w - r.x; }
+      if (drag.handle === 'e') r.w = clamp(p.x - s.x, MIN, 1 - s.x);
+      rect = r;
+    }
+    paint();
+  });
+
+  frame.addEventListener('pointerup', () => { drag = null; });
+
+  for (const b of document.querySelectorAll('.ratio')) b.addEventListener('click', () => applyRatio(Number(b.dataset.r)));
+
+  // One answer per request (Enter + click, or a key repeat, must not send twice)
+  let pending = false;
+  const finish = (result) => {
+    if (!pending) return;
+    pending = false;
+    window.shiftwheel.cropDone(result);
+  };
+  $('cancel').addEventListener('click', () => finish(null));
+  // Title-bar buttons: close cancels (the job is waiting for an answer), minimize just hides
+  $('close').addEventListener('click', () => (pending ? finish(null) : window.shiftwheel.cropDone(null)));
+  $('min').addEventListener('click', () => window.__TAURI__?.window?.getCurrentWindow().minimize());
+  $('save').addEventListener('click', () => finish(rect));
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') finish(null);
+    if (e.key === 'Enter') finish(rect);
+  });
+  window.addEventListener('resize', layout);
+
+  function init(d) {
+    if (!d) return;
+    pending = true;
+    W = d.width;
+    H = d.height;
+    img.src = d.src;
+    $('name').textContent = d.name;
+    $('count').textContent = d.count > 1 ? `× ${d.count}` : '';
+    $('save').textContent = d.count > 1 ? `Crop ${d.count} images` : 'Crop';
+    layout();
+    applyRatio(0);
+    $('save').focus();
+  }
+  window.shiftwheel.onCropInit(init);
+  // The request may have been sent before this page finished loading
+  window.shiftwheel.getCropRequest().then(init).catch(() => {});
+</script>
+</body>
+</html>
