@@ -22,7 +22,7 @@ pub fn create_tray(app: &AppHandle) -> Result<(TrayIcon, CheckMenuItem<tauri::Wr
         .checked(autostart)
         .build(app)?;
     let sep = PredefinedMenuItem::separator(app)?;
-    let hint_item = MenuItemBuilder::with_id("hint", "Cara pakai: Drag file lalu tekan Shift / Ctrl / Alt")
+    let hint_item = MenuItemBuilder::with_id("hint", "How to use: Drag file, then tap Shift / Ctrl / Alt")
         .enabled(false)
         .build(app)?;
     let info_item = MenuItemBuilder::with_id("info", concat!("Shiftwheel v", env!("CARGO_PKG_VERSION")))
