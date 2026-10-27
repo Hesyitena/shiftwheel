@@ -29,7 +29,7 @@
 | <kbd>Ctrl</kbd> | **Tools** | Compress, 50%, crop, trim borders, square 1:1, rotate, grayscale, mirror, mute, speed up |
 | <kbd>Alt</kbd> | **Actions** | Copy path, copy file to clipboard (`CF_HDROP`), copy/move to folder, open in Terminal, reveal in Explorer |
 
-Tap another modifier key mid-drag to switch wheels. Drop on the center hole, release outside the wheel, or press <kbd>Esc</kbd> to cancel. Output files are saved alongside the original (`photo (compressed).jpg`, `name (1).ext`) — originals are never overwritten.
+The wheel only opens while files are actually being dragged (from File Explorer or the desktop), so holding a modifier during a rubber-band selection, a window drag, or a text selection does nothing. Tap another modifier key mid-drag to switch wheels. Double-tap a modifier without dragging to preview its wheel. Drop on the center hole, release outside the wheel, or press <kbd>Esc</kbd> to cancel. Output files are saved alongside the original (`photo (compressed).jpg`, `name (1).ext`) — originals are never overwritten.
 
 Slices that need a helper program not yet installed are dimmed and display the required tool (e.g., AVIF → `ffmpeg`). The center ring displays the dragged file's thumbnail, name, and target slice in real time.
 
@@ -152,7 +152,7 @@ npm run build
 npm run dist
 ```
 
-Outputs are generated in `src-tauri/target/release/` and copied to `dist/`.
+The binary is written to `src-tauri/target/release/shiftwheel.exe` and the installer to `src-tauri/target/release/bundle/nsis/`.
 
 ---
 
